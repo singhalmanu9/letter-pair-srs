@@ -59,7 +59,6 @@ def load_state(deck: Deck, path: Path = STATE_FILE) -> SRSState:
             data = json.load(f)
         state = SRSState.from_dict(data)
         validate_state(deck, state)
-        logger.info(f"Loaded state with {len(state.pairs)} cards from {path}")
         logger.info(f"Loaded state with {len(state.pairs)} pairs from {path}")
         return state
     except Exception as e:
@@ -73,7 +72,6 @@ def save_state(state: SRSState, path: Path = STATE_FILE) -> None:
     try:
         with open(path, "w") as f:
             json.dump(state.to_dict(), f, indent=2)
-        logger.debug(f"Saved state with {len(state.pairs)} cards to {path}")
         logger.debug(f"Saved state with {len(state.pairs)} pairs to {path}")
     except Exception as e:
         logger.error(f"Failed to save state to {path}: {e}")
@@ -86,7 +84,6 @@ def append_review_event(event: ReviewEvent, path: Path = HISTORY_FILE) -> None:
     try:
         with open(path, "a") as f:
             f.write(json.dumps(event.to_dict()) + "\n")
-        logger.debug(f"Appended review event for {event.pair_id} to {path}")
         logger.debug(f"Appended review event for {event.pair_id} to {path}")
     except Exception as e:
         logger.error(f"Failed to append event to history {path}: {e}")

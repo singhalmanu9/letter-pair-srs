@@ -47,9 +47,10 @@ class PairState:
     pair_id: str  # Reference to DeckItem.id
     next_due: float  # Unix timestamp when pair is next due
     current_interval: int  # Current interval in seconds
-    attempt_count: int = 0  # Total attempts
+    attempt_count: int = 0  # Total non-timeout attempts (pass/fail with response)
     pass_count: int = 0  # Successful passes
-    fail_count: int = 0  # Failures (including timeouts)
+    fail_count: int = 0  # Non-timeout failures
+    timeout_count: int = 0  # Timeout outcomes
     answer_history: Dict[str, int] = field(default_factory=dict)  # {answer: count}
 
     def to_dict(self) -> Dict[str, Any]:
@@ -72,6 +73,29 @@ class PairState:
         if not self.answer_history:
             return None
         return max(self.answer_history, key=self.answer_history.get)
+
+    def total_responses(self) -> int:
+        """Return total outcomes recorded for this pair."""
+        return self.attempt_count + self.timeout_count
+
+    def validate_consistency(self) -> bool:
+        """Validate internal attempt/pass/fail/timeout bookkeeping invariants."""
+        if min(self.attempt_count, self.pass_count, self.fail_count, self.timeout_count) < 0:
+            raise ValueError(f"Negative counters are not allowed for pair {self.pair_id}")
+
+        if self.total_responses() - self.timeout_count != self.attempt_count:
+            raise ValueError(
+                f"Consistency error for pair {self.pair_id}: "
+                "total_responses - timeout_count must equal attempt_count"
+            )
+
+        if self.attempt_count != self.pass_count + self.fail_count:
+            raise ValueError(
+                f"Consistency error for pair {self.pair_id}: "
+                "attempt_count must equal pass_count + fail_count"
+            )
+
+        return True
 
 
 @dataclass
@@ -172,4 +196,5 @@ def validate_state(deck: Deck, state: SRSState) -> bool:
     for pair in state.pairs:
         if pair.pair_id not in deck_ids:
             raise ValueError(f"Pair {pair.pair_id} not found in deck")
+        pair.validate_consistency()
     return True

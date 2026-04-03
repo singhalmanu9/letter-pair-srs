@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from time import time
 
-from schemas import Deck, DeckItem, SRSState, PairState, ReviewEvent, ReviewResult
+from schemas import Deck, DeckItem, SRSState, PairState, ReviewEvent, ReviewResult, validate_state
 from persistence import (
     load_deck,
     save_deck,
@@ -56,6 +56,7 @@ class TestSchemas(unittest.TestCase):
             attempt_count=7,
             pass_count=5,
             fail_count=2,
+            timeout_count=3,
             answer_history={"apple": 3, "pomme": 1},
         )
         data = pair.to_dict()
@@ -66,7 +67,10 @@ class TestSchemas(unittest.TestCase):
         self.assertEqual(restored.attempt_count, 7)
         self.assertEqual(restored.pass_count, 5)
         self.assertEqual(restored.fail_count, 2)
+        self.assertEqual(restored.timeout_count, 3)
         self.assertEqual(restored.answer_history, {"apple": 3, "pomme": 1})
+        self.assertEqual(restored.total_responses(), 10)
+        self.assertTrue(restored.validate_consistency())
 
     def test_pair_state_answer_tracking(self):
         """Test tracking user's answer history."""
@@ -101,6 +105,31 @@ class TestSchemas(unittest.TestCase):
         # Verify history is preserved
         self.assertEqual(restored.answer_history["alpha"], 2)
         self.assertEqual(restored.answer_history["beta"], 1)
+
+    def test_pair_state_consistency_validation(self):
+        """Test PairState consistency checks."""
+        consistent_pair = PairState(
+            pair_id="q1",
+            next_due=time(),
+            current_interval=120,
+            attempt_count=4,
+            pass_count=3,
+            fail_count=1,
+            timeout_count=2,
+        )
+        self.assertTrue(consistent_pair.validate_consistency())
+
+        inconsistent_pair = PairState(
+            pair_id="q2",
+            next_due=time(),
+            current_interval=120,
+            attempt_count=4,
+            pass_count=1,
+            fail_count=1,
+            timeout_count=0,
+        )
+        with self.assertRaises(ValueError):
+            inconsistent_pair.validate_consistency()
 
     def test_review_event_roundtrip(self):
         """Test ReviewEvent to_dict and from_dict."""
@@ -193,6 +222,7 @@ class TestPersistence(unittest.TestCase):
                 attempt_count=1,
                 pass_count=1,
                 fail_count=0,
+                timeout_count=2,
                 answer_history={"a": 1},
             ),
             PairState(
@@ -202,6 +232,7 @@ class TestPersistence(unittest.TestCase):
                 attempt_count=4,
                 pass_count=2,
                 fail_count=2,
+                timeout_count=1,
                 answer_history={"b": 2, "bee": 1},
             ),
         ])
@@ -218,13 +249,19 @@ class TestPersistence(unittest.TestCase):
         self.assertEqual(loaded.pairs[0].attempt_count, 1)
         self.assertEqual(loaded.pairs[0].pass_count, 1)
         self.assertEqual(loaded.pairs[0].fail_count, 0)
+        self.assertEqual(loaded.pairs[0].timeout_count, 2)
         self.assertEqual(loaded.pairs[0].answer_history, {"a": 1})
         self.assertEqual(loaded.pairs[1].pair_id, "q2")
         self.assertEqual(loaded.pairs[1].current_interval, 90)
         self.assertEqual(loaded.pairs[1].attempt_count, 4)
         self.assertEqual(loaded.pairs[1].pass_count, 2)
         self.assertEqual(loaded.pairs[1].fail_count, 2)
+        self.assertEqual(loaded.pairs[1].timeout_count, 1)
         self.assertEqual(loaded.pairs[1].answer_history, {"b": 2, "bee": 1})
+        self.assertTrue(validate_state(Deck(items=[
+            DeckItem(id="q1", term="A", answers=["a"]),
+            DeckItem(id="q2", term="B", answers=["b"]),
+        ]), loaded))
 
     def test_history_append(self):
         """Test appending and loading review events."""
