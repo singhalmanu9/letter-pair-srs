@@ -4,11 +4,11 @@ Persistence layer for loading/saving deck, state, and history.
 
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import logging
 
 from schemas import Deck, SRSState, ReviewEvent, validate_deck, validate_state
-from config import DECK_FILE, STATE_FILE, HISTORY_FILE
+from config import DECK_FILE, STATE_FILE, HISTORY_FILE, SESSION_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +108,43 @@ def load_history(path: Path = HISTORY_FILE) -> List[ReviewEvent]:
         return events
     except Exception as e:
         logger.error(f"Failed to load history from {path}: {e}")
+        raise
+
+
+def load_session_snapshot(path: Path = SESSION_FILE) -> Optional[Dict[str, Any]]:
+    """Load active session snapshot, if one exists."""
+    if not path.exists():
+        return None
+
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("Session snapshot must be a JSON object")
+        return data
+    except Exception as e:
+        logger.error(f"Failed to load session snapshot from {path}: {e}")
+        raise
+
+
+def save_session_snapshot(snapshot: Dict[str, Any], path: Path = SESSION_FILE) -> None:
+    """Persist active session snapshot."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "w") as f:
+            json.dump(snapshot, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save session snapshot to {path}: {e}")
+        raise
+
+
+def clear_session_snapshot(path: Path = SESSION_FILE) -> None:
+    """Delete active session snapshot when review is finalized."""
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception as e:
+        logger.error(f"Failed to clear session snapshot at {path}: {e}")
         raise
 
 

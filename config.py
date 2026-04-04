@@ -13,6 +13,7 @@ APP_DATA_DIR.mkdir(exist_ok=True)
 DECK_FILE = APP_DATA_DIR / "deck.json"
 STATE_FILE = APP_DATA_DIR / "state.json"
 HISTORY_FILE = APP_DATA_DIR / "history.jsonl"
+SESSION_FILE = APP_DATA_DIR / "session.json"
 
 
 @dataclass

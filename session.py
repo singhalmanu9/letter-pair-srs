@@ -4,7 +4,7 @@ Session orchestration for review flow and timeout handling.
 
 from dataclasses import dataclass
 from time import time
-from typing import Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from engine import ReviewEngine, SessionStats
 from schemas import DeckItem, ReviewEvent
@@ -30,10 +30,14 @@ class SessionController:
         engine: ReviewEngine,
         save_state_callback: Optional[Callable] = None,
         append_event_callback: Optional[Callable[[ReviewEvent], None]] = None,
+        save_active_review_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        clear_active_review_callback: Optional[Callable[[], None]] = None,
     ):
         self.engine = engine
         self._save_state = save_state_callback
         self._append_event = append_event_callback
+        self._save_active_review = save_active_review_callback
+        self._clear_active_review = clear_active_review_callback
 
         self.active_review: Optional[ActiveReview] = None
         self.reviewed_events: List[ReviewEvent] = []
@@ -57,6 +61,7 @@ class SessionController:
                 timeout_seconds=self.engine.config.timeout_seconds,
             ),
         )
+        self._persist_active_review()
         return due_item
 
     def time_remaining(self, now: Optional[float] = None) -> Optional[float]:
@@ -72,7 +77,55 @@ class SessionController:
         self._enforce_not_timed_out(now=now)
 
         self.active_review.revealed = True
+        self._persist_active_review()
         return list(self.active_review.answers)
+
+    def active_review_snapshot(self) -> Optional[Dict[str, Any]]:
+        """Return serializable snapshot for current active review."""
+        if self.active_review is None:
+            return None
+
+        return {
+            "pair_id": self.active_review.pair_id,
+            "term": self.active_review.term,
+            "answers": list(self.active_review.answers),
+            "started_at": self.active_review.timer.started_at,
+            "timeout_seconds": self.active_review.timer.timeout_seconds,
+            "revealed": self.active_review.revealed,
+        }
+
+    def restore_active_review(self, snapshot: Optional[Dict[str, Any]], now: Optional[float] = None) -> None:
+        """Restore in-progress review from snapshot with a fresh timeout window."""
+        if snapshot is None:
+            return
+        if self.active_review is not None:
+            raise ValueError("Cannot restore review while another review is active")
+
+        current_time = time() if now is None else now
+
+        required_keys = {
+            "pair_id",
+            "term",
+            "answers",
+            "started_at",
+            "timeout_seconds",
+            "revealed",
+        }
+        missing = required_keys.difference(snapshot)
+        if missing:
+            raise ValueError(f"Invalid session snapshot, missing: {sorted(missing)}")
+
+        self.active_review = ActiveReview(
+            pair_id=snapshot["pair_id"],
+            term=snapshot["term"],
+            answers=list(snapshot["answers"]),
+            timer=ReviewTimer(
+                # On app restart we intentionally restart the countdown window.
+                started_at=current_time,
+                timeout_seconds=int(snapshot["timeout_seconds"]),
+            ),
+            revealed=bool(snapshot["revealed"]),
+        )
 
     def grade_pass(self, user_answer: Optional[str] = None, now: Optional[float] = None) -> ReviewEvent:
         """Grade active review as pass after reveal."""
@@ -147,4 +200,14 @@ class SessionController:
         if self._save_state is not None:
             self._save_state(self.engine.state)
 
+        if self._clear_active_review is not None:
+            self._clear_active_review()
+
         self.active_review = None
+
+    def _persist_active_review(self) -> None:
+        if self._save_active_review is None:
+            return
+        snapshot = self.active_review_snapshot()
+        if snapshot is not None:
+            self._save_active_review(snapshot)
