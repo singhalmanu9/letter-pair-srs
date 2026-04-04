@@ -53,7 +53,7 @@ class TestSchemas(unittest.TestCase):
             pair_id="q1",
             next_due=due,
             current_interval=120,
-            attempt_count=7,
+            response_count=7,
             pass_count=5,
             fail_count=2,
             timeout_count=3,
@@ -64,7 +64,7 @@ class TestSchemas(unittest.TestCase):
         self.assertEqual(restored.pair_id, "q1")
         self.assertEqual(restored.next_due, due)
         self.assertEqual(restored.current_interval, 120)
-        self.assertEqual(restored.attempt_count, 7)
+        self.assertEqual(restored.response_count, 7)
         self.assertEqual(restored.pass_count, 5)
         self.assertEqual(restored.fail_count, 2)
         self.assertEqual(restored.timeout_count, 3)
@@ -112,7 +112,7 @@ class TestSchemas(unittest.TestCase):
             pair_id="q1",
             next_due=time(),
             current_interval=120,
-            attempt_count=4,
+            response_count=4,
             pass_count=3,
             fail_count=1,
             timeout_count=2,
@@ -123,7 +123,7 @@ class TestSchemas(unittest.TestCase):
             pair_id="q2",
             next_due=time(),
             current_interval=120,
-            attempt_count=4,
+            response_count=4,
             pass_count=1,
             fail_count=1,
             timeout_count=0,
@@ -147,6 +147,25 @@ class TestSchemas(unittest.TestCase):
         self.assertEqual(restored.pair_id, "q1")
         self.assertEqual(restored.result, ReviewResult.PASS)
         self.assertEqual(restored.user_answer, "apple")
+
+    def test_pair_state_from_dict_backwards_compat_attempt_count(self):
+        """Test legacy attempt_count is accepted and mapped to response_count."""
+        data = {
+            "pair_id": "q1",
+            "next_due": 100.0,
+            "current_interval": 120,
+            "attempt_count": 3,
+            "pass_count": 2,
+            "fail_count": 1,
+            "timeout_count": 1,
+            "answer_history": {"apple": 2},
+        }
+
+        pair = PairState.from_dict(data)
+        self.assertEqual(pair.response_count, 3)
+        self.assertEqual(pair.pass_count, 2)
+        self.assertEqual(pair.fail_count, 1)
+        self.assertEqual(pair.timeout_count, 1)
 
 
 class TestPersistence(unittest.TestCase):
@@ -219,7 +238,7 @@ class TestPersistence(unittest.TestCase):
                 pair_id="q1",
                 next_due=time(),
                 current_interval=60,
-                attempt_count=1,
+                response_count=1,
                 pass_count=1,
                 fail_count=0,
                 timeout_count=2,
@@ -229,7 +248,7 @@ class TestPersistence(unittest.TestCase):
                 pair_id="q2",
                 next_due=time() + 120,
                 current_interval=90,
-                attempt_count=4,
+                response_count=4,
                 pass_count=2,
                 fail_count=2,
                 timeout_count=1,
@@ -246,14 +265,14 @@ class TestPersistence(unittest.TestCase):
 
         self.assertEqual(len(loaded.pairs), 2)
         self.assertEqual(loaded.pairs[0].pair_id, "q1")
-        self.assertEqual(loaded.pairs[0].attempt_count, 1)
+        self.assertEqual(loaded.pairs[0].response_count, 1)
         self.assertEqual(loaded.pairs[0].pass_count, 1)
         self.assertEqual(loaded.pairs[0].fail_count, 0)
         self.assertEqual(loaded.pairs[0].timeout_count, 2)
         self.assertEqual(loaded.pairs[0].answer_history, {"a": 1})
         self.assertEqual(loaded.pairs[1].pair_id, "q2")
         self.assertEqual(loaded.pairs[1].current_interval, 90)
-        self.assertEqual(loaded.pairs[1].attempt_count, 4)
+        self.assertEqual(loaded.pairs[1].response_count, 4)
         self.assertEqual(loaded.pairs[1].pass_count, 2)
         self.assertEqual(loaded.pairs[1].fail_count, 2)
         self.assertEqual(loaded.pairs[1].timeout_count, 1)
@@ -297,7 +316,7 @@ class TestPersistence(unittest.TestCase):
         state = initialize_state_for_deck(deck, initial_interval=60)
 
         self.assertEqual(len(state.pairs), 3)
-        self.assertTrue(all(pair.attempt_count == 0 for pair in state.pairs))
+        self.assertTrue(all(pair.response_count == 0 for pair in state.pairs))
         self.assertTrue(all(pair.current_interval == 60 for pair in state.pairs))
 
 

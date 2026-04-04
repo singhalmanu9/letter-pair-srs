@@ -47,7 +47,7 @@ class PairState:
     pair_id: str  # Reference to DeckItem.id
     next_due: float  # Unix timestamp when pair is next due
     current_interval: int  # Current interval in seconds
-    attempt_count: int = 0  # Total non-timeout attempts (pass/fail with response)
+    response_count: int = 0  # Total non-timeout responses (pass/fail with response)
     pass_count: int = 0  # Successful passes
     fail_count: int = 0  # Non-timeout failures
     timeout_count: int = 0  # Timeout outcomes
@@ -58,7 +58,11 @@ class PairState:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PairState":
-        return cls(**data)
+        data_copy = data.copy()
+        # Backward compatibility for earlier state files.
+        if "response_count" not in data_copy and "attempt_count" in data_copy:
+            data_copy["response_count"] = data_copy.pop("attempt_count")
+        return cls(**data_copy)
 
     def record_answer(self, answer: str) -> None:
         """Record that the user gave this answer."""
@@ -76,23 +80,23 @@ class PairState:
 
     def total_responses(self) -> int:
         """Return total outcomes recorded for this pair."""
-        return self.attempt_count + self.timeout_count
+        return self.response_count + self.timeout_count
 
     def validate_consistency(self) -> bool:
-        """Validate internal attempt/pass/fail/timeout bookkeeping invariants."""
-        if min(self.attempt_count, self.pass_count, self.fail_count, self.timeout_count) < 0:
+        """Validate internal response/pass/fail/timeout bookkeeping invariants."""
+        if min(self.response_count, self.pass_count, self.fail_count, self.timeout_count) < 0:
             raise ValueError(f"Negative counters are not allowed for pair {self.pair_id}")
 
-        if self.total_responses() - self.timeout_count != self.attempt_count:
+        if self.total_responses() - self.timeout_count != self.response_count:
             raise ValueError(
                 f"Consistency error for pair {self.pair_id}: "
-                "total_responses - timeout_count must equal attempt_count"
+                "total_responses - timeout_count must equal response_count"
             )
 
-        if self.attempt_count != self.pass_count + self.fail_count:
+        if self.response_count != self.pass_count + self.fail_count:
             raise ValueError(
                 f"Consistency error for pair {self.pair_id}: "
-                "attempt_count must equal pass_count + fail_count"
+                "response_count must equal pass_count + fail_count"
             )
 
         return True

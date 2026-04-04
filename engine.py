@@ -19,7 +19,7 @@ class SessionStats:
     passed: int
     failed: int
     timed_out: int
-    attempts: int
+    responses: int
     pass_rate: float
 
 
@@ -70,7 +70,7 @@ class ReviewEngine:
         pair = self._get_pair(pair_id)
         current_time = time() if now is None else now
 
-        pair.attempt_count += 1
+        pair.response_count += 1
         pair.pass_count += 1
         if user_answer:
             pair.record_answer(user_answer)
@@ -101,7 +101,7 @@ class ReviewEngine:
         pair = self._get_pair(pair_id)
         current_time = time() if now is None else now
 
-        pair.attempt_count += 1
+        pair.response_count += 1
         pair.fail_count += 1
         if user_answer:
             pair.record_answer(user_answer)
@@ -150,11 +150,11 @@ class ReviewEngine:
         passed = sum(1 for event in events if event.result == ReviewResult.PASS)
         failed = sum(1 for event in events if event.result == ReviewResult.FAIL)
         timed_out = sum(1 for event in events if event.result == ReviewResult.TIMEOUT)
-        attempts = passed + failed
+        responses = passed + failed
 
-        if total - timed_out != attempts:
+        if total - timed_out != responses:
             raise ValueError(
-                "Session consistency error: total responses - timed_out must equal attempts"
+                "Session consistency error: total responses - timed_out must equal responses"
             )
 
         pass_rate = (passed / total) if total else 0.0
@@ -164,7 +164,7 @@ class ReviewEngine:
             passed=passed,
             failed=failed,
             timed_out=timed_out,
-            attempts=attempts,
+            responses=responses,
             pass_rate=pass_rate,
         )
 

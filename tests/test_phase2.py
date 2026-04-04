@@ -51,7 +51,7 @@ class TestReviewEngine(unittest.TestCase):
                 pair_id="q1",
                 next_due=100.0,
                 current_interval=100,
-                attempt_count=2,
+                response_count=2,
                 pass_count=1,
                 fail_count=1,
             )
@@ -67,7 +67,7 @@ class TestReviewEngine(unittest.TestCase):
 
         pair = state.pairs[0]
         expected_interval = self._expected_pass_interval(100)
-        self.assertEqual(pair.attempt_count, 3)
+        self.assertEqual(pair.response_count, 3)
         self.assertEqual(pair.pass_count, 2)
         self.assertEqual(pair.fail_count, 1)
         self.assertEqual(pair.timeout_count, 0)
@@ -92,7 +92,7 @@ class TestReviewEngine(unittest.TestCase):
                 pair_id="q1",
                 next_due=100.0,
                 current_interval=300,
-                attempt_count=0,
+                response_count=0,
                 pass_count=0,
                 fail_count=0,
             )
@@ -107,7 +107,7 @@ class TestReviewEngine(unittest.TestCase):
         )
 
         pair = state.pairs[0]
-        self.assertEqual(pair.attempt_count, 1)
+        self.assertEqual(pair.response_count, 1)
         self.assertEqual(pair.pass_count, 0)
         self.assertEqual(pair.fail_count, 1)
         self.assertEqual(pair.timeout_count, 0)
@@ -127,7 +127,7 @@ class TestReviewEngine(unittest.TestCase):
                 pair_id="q1",
                 next_due=100.0,
                 current_interval=300,
-                attempt_count=5,
+                response_count=5,
                 pass_count=3,
                 fail_count=2,
             )
@@ -141,7 +141,7 @@ class TestReviewEngine(unittest.TestCase):
         )
 
         pair = state.pairs[0]
-        self.assertEqual(pair.attempt_count, 5)
+        self.assertEqual(pair.response_count, 5)
         self.assertEqual(pair.pass_count, 3)
         self.assertEqual(pair.fail_count, 2)
         self.assertEqual(pair.timeout_count, 1)
@@ -188,9 +188,9 @@ class TestReviewEngine(unittest.TestCase):
         self.assertEqual(stats.passed, 1)
         self.assertEqual(stats.failed, 1)
         self.assertEqual(stats.timed_out, 1)
-        self.assertEqual(stats.attempts, 2)
-        self.assertEqual(stats.total - stats.timed_out, stats.attempts)
-        self.assertEqual(stats.attempts, stats.passed + stats.failed)
+        self.assertEqual(stats.responses, 2)
+        self.assertEqual(stats.total - stats.timed_out, stats.responses)
+        self.assertEqual(stats.responses, stats.passed + stats.failed)
         self.assertAlmostEqual(stats.pass_rate, 1 / 3)
 
 
