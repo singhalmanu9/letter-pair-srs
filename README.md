@@ -6,6 +6,7 @@ A lightweight spaced repetition system for memorizing letter pairs. Self-grade r
 
 ```bash
 source lp-venv/bin/activate
+python3 -m pip install -r requirements.txt
 python main.py
 ```
 
@@ -16,7 +17,7 @@ python main.py
 - `persistence.py` – JSON load/save for deck, pair state, and review history
 - `engine.py` – Review engine (due selection, scheduling)
 - `timer.py` – Session timer and timeout management
-- `ui.py` – Tkinter UI views
+- `ui.py` – PySide6 UI views
 - `main.py` – App entry point
 - `tests/` – Unit tests
 - `data/` – Letter pair deck, scheduling state, and review history files
@@ -26,7 +27,7 @@ python main.py
 1. **Review Engine** (engine.py) – Pair scheduling logic
 2. **Persistence** (persistence.py) – JSON storage and recovery
 3. **Timer/Session** (timer.py) – Countdown and timeout handling
-4. **UI** (ui.py) – Tkinter display layer (thin wrapper over engine)
+4. **UI** (ui.py) – PySide6 display layer (thin wrapper over engine)
 
 ## Workflow
 
