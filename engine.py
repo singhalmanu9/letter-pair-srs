@@ -3,7 +3,7 @@ Core review engine for due selection and scheduling transitions.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from time import time
 from typing import Dict, List, Optional
 
@@ -193,7 +193,7 @@ class ReviewEngine:
             term=item.term,
             result=result,
             elapsed_seconds=elapsed_seconds,
-            timestamp=datetime.utcfromtimestamp(current_time).isoformat(),
+            timestamp=datetime.fromtimestamp(current_time, timezone.utc).isoformat(),
             timeout_seconds=self.config.timeout_seconds,
             user_answer=user_answer,
             reason=reason,

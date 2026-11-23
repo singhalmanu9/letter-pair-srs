@@ -83,7 +83,7 @@ class TestReviewEngine(unittest.TestCase):
         self.assertEqual(event.timeout_seconds, self.config.timeout_seconds)
         self.assertEqual(event.user_answer, "apple")
         self.assertIsNone(event.reason)
-        self.assertEqual(event.timestamp, "1970-01-01T00:03:20")
+        self.assertEqual(event.timestamp, "1970-01-01T00:03:20+00:00")
 
     def test_record_fail_resets_interval_and_returns_fail_event(self):
         deck = Deck(items=[DeckItem(id="q1", term="AC", answers=["apple"])])
