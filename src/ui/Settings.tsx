@@ -1,10 +1,12 @@
 import { useEffect, useState } from "preact/hooks";
 import { pickTextFile } from "../app/files";
-import { TEMPLATES } from "../data/templates";
 import { deckUpdateHasChanges, ImportError, parseImport, planDeckUpdate, planImport } from "../lib/backup";
 import type { DeckUpdatePlan } from "../lib/backup";
 import type { Deck } from "../lib/schemas";
-import type { DeckTemplate } from "../lib/templates";
+import { EMPTY_TEMPLATE, type DeckTemplate } from "../lib/templates";
+import { faceColors, pieceName } from "../lib/cube";
+import { DEFAULT_PROFILE, planSchemeUpdate, type MemoProfile, type SchemeUpdatePlan } from "../lib/scheme";
+import { SchemeWizard } from "./Onboarding";
 import { ask, confirmAction, errorMessage, formatAgo, Icon, plural, toast } from "./common";
 import { store, useStore } from "./store";
 
@@ -15,6 +17,22 @@ export function Settings() {
   useEffect(() => {
     void store.repo.listDecks().then(setDecks);
   }, [store.version]);
+
+  const [editingScheme, setEditingScheme] = useState(false);
+  const profile = store.profile;
+
+  if (editingScheme) {
+    return (
+      <SchemeWizard
+        initial={profile ?? DEFAULT_PROFILE}
+        finishLabel="Save"
+        onCancel={() => setEditingScheme(false)}
+        onDone={async (next) => {
+          if (await saveScheme(profile, next)) setEditingScheme(false);
+        }}
+      />
+    );
+  }
 
   const timer = settings.timer;
   const sec = (ms: number) => Math.round(ms / 100) / 10;
@@ -37,8 +55,15 @@ export function Settings() {
             ))}
           </select>
         </label>
-        <button class="setting setting-button" onClick={() => void newDeckFromTemplate()}>
-          <span>New deck from a template</span>
+        <button class="setting setting-button" onClick={() => setEditingScheme(true)}>
+          <span>
+            Letter scheme
+            <span class="setting-sub">{profile ? describeProfile(profile) : "Not set up yet"}</span>
+          </span>
+          <Icon name="chevron" size={18} />
+        </button>
+        <button class="setting setting-button" onClick={() => void newDeck()}>
+          <span>New deck</span>
           <Icon name="chevron" size={18} />
         </button>
       </div>
@@ -143,16 +168,81 @@ function NumberSetting(props: { label: string; value: number; min: number; max: 
   );
 }
 
-export async function newDeckFromTemplate(): Promise<void> {
-  const template = await ask<DeckTemplate>(
+function describeProfile(p: MemoProfile): string {
+  const colors = faceColors(p.orientation);
+  return `${colors.U} top, ${colors.F} front · buffers ${pieceName("corner", p.cornerBuffer)} and ${pieceName("edge", p.edgeBuffer)}`;
+}
+
+async function newDeck(): Promise<void> {
+  const profile = store.profile;
+  const choice = await ask(
     "New deck",
-    <p>Pick a starting point. The new deck becomes your active deck; your other decks are kept.</p>,
+    <p>The new deck becomes your active deck. Your other decks are kept.</p>,
     [
-      { label: "Cancel", value: null as unknown as DeckTemplate, tone: "plain" },
-      ...TEMPLATES.map((t) => ({ label: t.name, value: t, tone: "primary" as const })),
+      { label: "Cancel", value: null, tone: "plain" },
+      { label: "Empty", value: "empty" as const, tone: "plain" },
+      ...(profile ? [{ label: "All my letter pairs", value: "scheme" as const, tone: "primary" as const }] : []),
     ],
   );
-  if (template) await store.startFromTemplate(template);
+  if (choice === "empty") await store.startFromTemplate(EMPTY_TEMPLATE);
+  if (choice === "scheme" && profile) await store.createDeckFromProfile(profile);
+}
+
+/** Save a changed scheme, previewing what happens to the active deck. Returns false if cancelled. */
+async function saveScheme(before: MemoProfile | null, after: MemoProfile): Promise<boolean> {
+  const plan = planSchemeUpdate(store.app.deck, before, after);
+  const nothingChanges = !plan.renamed.length && !plan.added.length && !plan.missing.length;
+  if (nothingChanges) {
+    await store.applySchemeChange(after, plan, false);
+    toast("Letter scheme saved");
+    return true;
+  }
+
+  let removeMissing = false;
+  if (plan.missing.length) {
+    const choice = await ask(
+      `${plural(plan.missing.length, "pair isn't", "pairs aren't")} in the new scheme`,
+      <p>{listTerms(plan.missing)}. Keep them in your deck, or remove them along with their progress?</p>,
+      [
+        { label: "Cancel", value: null, tone: "plain" },
+        { label: "Remove", value: true, tone: "danger" },
+        { label: "Keep", value: false, tone: "primary" },
+      ],
+    );
+    if (choice === null) return false;
+    removeMissing = choice;
+  }
+  const ok = await confirmAction(
+    `Update “${store.app.deck.name}”?`,
+    <SchemePreview plan={plan} removeMissing={removeMissing} />,
+    "Save scheme",
+  );
+  if (!ok) return false;
+  await store.applySchemeChange(after, plan, removeMissing);
+  toast("Letter scheme saved");
+  return true;
+}
+
+function SchemePreview({ plan, removeMissing }: { plan: SchemeUpdatePlan; removeMissing: boolean }) {
+  return (
+    <div class="preview">
+      <ul>
+        {plan.renamed.length > 0 && (
+          <li>
+            {plural(plan.renamed.length, "pair")} renamed, keeping answers and progress:{" "}
+            {listTerms(plan.renamed.map((r) => `${r.from} → ${r.to}`))}
+          </li>
+        )}
+        {plan.added.length > 0 && <li>{plural(plan.added.length, "new pair")}, no answers yet: {listTerms(plan.added)}</li>}
+        {plan.missing.length > 0 && (
+          <li>
+            {plural(plan.missing.length, "pair")} {removeMissing ? "removed" : "kept, though the scheme doesn't need them"}:{" "}
+            {listTerms(plan.missing)}
+          </li>
+        )}
+      </ul>
+    </div>
+  );
 }
 
 async function resetAll(): Promise<void> {

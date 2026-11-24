@@ -9,6 +9,7 @@
  *   lpsrs:history:<id>         ReviewEvent[] (append-only)
  *   lpsrs:activeReview         ActiveReviewSnapshot
  *   lpsrs:settings             Settings
+ *   lpsrs:profile              MemoProfile (letters, orientation, buffers)
  *
  * Corrupt or invalid data is never silently overwritten: reads throw a
  * CorruptDataError naming the key, and the app decides what to do.
@@ -25,6 +26,7 @@ import {
   type ReviewEvent,
 } from "./schemas";
 import { DEFAULT_CONFIG, DEFAULT_TIMER, type AppConfig, type TimerConfig } from "./config";
+import { parseProfile, profileProblems, type MemoProfile } from "./scheme";
 import type { AsyncKeyValueStore } from "./storage";
 
 export const SCHEMA_VERSION = 1;
@@ -39,6 +41,7 @@ export const KEYS = {
   history: (id: string) => `${PREFIX}history:${id}`,
   activeReview: `${PREFIX}activeReview`,
   settings: `${PREFIX}settings`,
+  profile: `${PREFIX}profile`,
 } as const;
 
 /** User preferences. Missing fields fall back to defaults, so new settings need no migration. */
@@ -209,6 +212,19 @@ export class Repository {
 
   async saveSettings(settings: Settings): Promise<void> {
     await this.write(KEYS.settings, parseSettings(settings));
+  }
+
+  // --- Memo profile ------------------------------------------------------------
+
+  /** The user's letter scheme and orientation, or null before onboarding. */
+  async getProfile(): Promise<MemoProfile | null> {
+    return this.readParsed(KEYS.profile, parseProfile);
+  }
+
+  async saveProfile(profile: MemoProfile): Promise<void> {
+    const problems = profileProblems(profile);
+    if (problems.length) throw new Error(problems.join(" "));
+    await this.write(KEYS.profile, parseProfile(profile));
   }
 
   // --- Maintenance -----------------------------------------------------------

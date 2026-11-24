@@ -3,7 +3,7 @@ import { stageName } from "../lib/srs";
 import { formatDuration, plural } from "./common";
 import { store, useStore } from "./store";
 
-export function Home({ onStart }: { onStart: () => void }) {
+export function Home({ onStart, onFillIn }: { onStart: () => void; onFillIn: () => void }) {
   useStore();
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -39,7 +39,11 @@ export function Home({ onStart }: { onStart: () => void }) {
 
       {unanswered > 0 && (
         <p class="notice">
-          {plural(unanswered, "pair needs", "pairs need")} an answer. They'll come up in reviews.
+          {plural(unanswered, "pair needs", "pairs need")} an answer. They'll come up in reviews, or{" "}
+          <button class="link" onClick={onFillIn}>
+            fill them in now
+          </button>
+          .
         </p>
       )}
 

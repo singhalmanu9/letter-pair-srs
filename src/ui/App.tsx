@@ -1,8 +1,8 @@
 import { useEffect, useState } from "preact/hooks";
-import { TEMPLATES } from "../data/templates";
 import { DialogHost, errorMessage, Icon, ToastHost, confirmAction } from "./common";
 import { Deck } from "./Deck";
 import { Home } from "./Home";
+import { FillIn, Onboarding } from "./Onboarding";
 import { Review } from "./Review";
 import { importFile, Settings } from "./Settings";
 import { store, useStore } from "./store";
@@ -20,6 +20,7 @@ export function App() {
   useStore();
   const [tab, setTab] = useState<Tab>("home");
   const [reviewing, setReviewing] = useState(false);
+  const [fillingIn, setFillingIn] = useState(false);
 
   useEffect(() => {
     void store.init();
@@ -34,7 +35,9 @@ export function App() {
   let content;
   if (status.kind === "loading") content = <div class="center muted">Loading…</div>;
   else if (status.kind === "error") content = <ErrorScreen error={status.error} storageKey={status.key} />;
-  else if (status.kind === "no-deck") content = <Onboarding />;
+  else if (status.kind === "no-deck")
+    content = <Onboarding onImport={() => void importFile()} onCreated={() => setFillingIn(true)} />;
+  else if (fillingIn) content = <FillIn onDone={() => setFillingIn(false)} />;
   else if (reviewing) content = <Review onExit={() => setReviewing(false)} />;
   else
     content = (
@@ -49,7 +52,7 @@ export function App() {
           ))}
         </nav>
         <main class="main">
-          {tab === "home" && <Home onStart={() => setReviewing(true)} />}
+          {tab === "home" && <Home onStart={() => setReviewing(true)} onFillIn={() => setFillingIn(true)} />}
           {tab === "deck" && <Deck />}
           {tab === "stats" && (
             <div class="page center">
@@ -68,27 +71,6 @@ export function App() {
       <DialogHost />
       <ToastHost />
     </>
-  );
-}
-
-function Onboarding() {
-  return (
-    <div class="page onboarding">
-      <h1>BLD Letter Pairs SRS</h1>
-      <p class="muted">Drill your letter pair images with spaced repetition. Pick a starting deck. You can edit everything later.</p>
-      <div class="template-list">
-        {TEMPLATES.map((t) => (
-          <button key={t.id} class="template" onClick={() => void store.startFromTemplate(t)}>
-            <span class="template-name">{t.name}</span>
-            <span class="muted">{t.description}</span>
-          </button>
-        ))}
-        <button class="template" onClick={() => void importFile()}>
-          <span class="template-name">Import a file</span>
-          <span class="muted">A backup from this app, or a list of your letter pairs.</span>
-        </button>
-      </div>
-    </div>
   );
 }
 

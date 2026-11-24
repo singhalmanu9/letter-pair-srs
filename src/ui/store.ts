@@ -12,6 +12,7 @@ import { configFromSettings, Repository, type Settings } from "../lib/repository
 import { addAnswerToPair, removeAnswerFromPair, termKey, type PairState } from "../lib/schemas";
 import { getBrowserStore, requestPersistentStorage, type AsyncKeyValueStore } from "../lib/storage";
 import type { DeckTemplate } from "../lib/templates";
+import { applySchemeUpdate, generatePairTerms, type MemoProfile, type SchemeUpdatePlan } from "../lib/scheme";
 import { downloadJSON } from "../app/files";
 
 export type Status =
@@ -26,6 +27,8 @@ export class AppStore {
   readonly repo: Repository;
   status: Status = { kind: "loading" };
   settings: Settings | null = null;
+  /** Letter scheme and orientation, or null if the user skipped setting one up. */
+  profile: MemoProfile | null = null;
   /** Bumped on every change so components re-render. */
   version = 0;
   private readonly listeners = new Set<() => void>();
@@ -63,6 +66,7 @@ export class AppStore {
     try {
       await this.repo.init();
       this.settings = await this.repo.getSettings();
+      this.profile = await this.repo.getProfile();
     } catch (error) {
       this.setResult({ kind: "error", error, key: null });
       return;
@@ -83,6 +87,34 @@ export class AppStore {
 
   async startFromTemplate(template: DeckTemplate): Promise<void> {
     await createDeck(this.repo, template, Date.now());
+    await this.reload();
+  }
+
+  /** Save the profile and create a deck with every pair it generates (no answers yet). */
+  async createDeckFromProfile(profile: MemoProfile, name = "My letter pairs"): Promise<void> {
+    await this.repo.init();
+    await this.repo.saveProfile(profile);
+    const now = Date.now();
+    const deck = {
+      id: crypto.randomUUID(),
+      name,
+      templateId: "scheme",
+      createdAt: now,
+      updatedAt: now,
+      items: generatePairTerms(profile).map((term) => ({ id: crypto.randomUUID(), term, answers: [], updatedAt: now })),
+    };
+    await this.repo.saveDeck(deck);
+    await this.repo.setActiveDeck(deck.id);
+    await this.reload();
+  }
+
+  /** Save a changed profile and bring the active deck in line with it. */
+  async applySchemeChange(profile: MemoProfile, plan: SchemeUpdatePlan, removeMissing: boolean): Promise<void> {
+    await this.repo.saveProfile(profile);
+    if (this.status.kind === "ready") {
+      await this.app.writes.idle();
+      await this.repo.saveDeck(applySchemeUpdate(this.app.deck, plan, removeMissing, Date.now()));
+    }
     await this.reload();
   }
 

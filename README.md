@@ -1,8 +1,45 @@
-# Letter Pair SRS
+# BLD Letter Pairs SRS
 
-A lightweight spaced repetition system for memorizing letter pairs, built for blindfolded speedcubing. Self-graded reveals, auto-fail on timeout, and everything stored locally in your browser.
+Spaced repetition for blindfolded cubing letter pairs, like WaniKani for your memo images. Mobile-first, installable, works offline, and everything is stored locally in your browser.
 
-Ported from a Python desktop app to a static web app for GitHub Pages; the review UI is still to come.
+Live at https://singhalmanu9.github.io/letter-pair-srs/
+
+## How it works
+
+1. **Set up your letters:** your memo orientation, the letter on every sticker (Speffz by default, editable on a cube net), and your buffers. The app generates every letter pair that can come up in memo.
+2. **Fill in the images you already have.** Pairs without one still come up in reviews, and you come up with an image on the spot.
+3. **Review:** recall your image, reveal, then tap the answer you thought of. "Something else" saves a new answer without moving the pair up a level. Running out of time counts as a fail.
+
+## How reviews are scheduled
+
+Scheduling uses WaniKani's fixed intervals as Levels 1-9. A pass moves a pair
+up one level; a fail or timeout drops it one level (two from Level 5 up), never
+below Level 1. New pairs that are failed stay New and come back in the same session.
+
+| Level | Next review after |
+|---|---|
+| New | due immediately |
+| 1 / 2 / 3 / 4 | 4 hours / 8 hours / 1 day / 2 days |
+| 5 / 6 | 1 week / 2 weeks |
+| 7 | 1 month |
+| 8 | 4 months |
+| 9 | never reviewed again (burned) |
+
+Recall time is either fixed (10 seconds by default) or shorter at higher levels.
+
+## Data storage
+
+Everything is stored in the browser's `localStorage`, per device. It survives
+refreshes, restarts and clearing the browser cache, but not clearing site data,
+so export a backup from Settings now and then. Stored data is versioned, and
+unreadable data is reported rather than overwritten.
+
+## Future improvements
+
+- **Pieces card:** show the pieces themselves (in your orientation) instead of letters, to train translating pieces to letters as well as letters to images.
+- **Stats page:** including how your images for each pair change over time.
+- Separate pair lists for corners and edges.
+- Final app icon (the current one is a placeholder).
 
 ## Development
 
@@ -15,41 +52,18 @@ npm test           # run the test suite
 npm run build      # type-check and build to dist/
 ```
 
+Pushing to `main` deploys to GitHub Pages.
+
 ## Project structure
 
-- `src/lib/config.ts`: settings and defaults (timeout, SRS stages, shortcuts)
-- `src/lib/srs.ts`: stage transition rules
-- `src/lib/schemas.ts`: data types, parsing/validation of stored data, deck helpers
-- `src/lib/progress.ts`: creating pair progress and syncing it with the deck
-- `src/lib/engine.ts`: picking the next due pair and applying review results
-- `src/lib/session.ts`: review flow: start, reveal, grade, timeout, resume
-- `src/lib/timer.ts`: per-review countdown
-- `src/lib/storage.ts`: async key-value storage (`localStorage`, in-memory fallback)
-- `src/lib/repository.ts`: typed, versioned storage of decks, progress, history
-- `src/lib/templates.ts`: creating user decks from templates
-- `src/app/bootstrap.ts`: app startup and wiring the session to storage
-- `src/data/templates/`: bundled starter decks
-- `src/main.ts`: app entry point (placeholder UI for now)
+- `src/lib/`: app logic, no UI
+  - `config.ts`: settings and defaults (recall time, SRS levels)
+  - `srs.ts`: level transition rules
+  - `engine.ts`, `session.ts`, `timer.ts`: picking due pairs, the review flow, the countdown
+  - `cube.ts`, `scheme.ts`: cube model, letter schemes, orientation, pair generation
+  - `schemas.ts`, `progress.ts`: data types, validation, syncing progress with the deck
+  - `storage.ts`, `repository.ts`: versioned storage on top of `localStorage`
+  - `backup.ts`: export, import, and updating a deck from a file
+- `src/app/`: startup and browser file helpers
+- `src/ui/`: Preact screens (review, home, deck, settings, onboarding)
 - `tests/`: Vitest unit tests
-
-## How reviews are scheduled
-
-Scheduling uses WaniKani's fixed intervals as Levels 1-9. A pass moves a pair
-up one level; a fail or timeout drops it one level (two from Level 5 up), never
-below Level 1.
-
-| Level | Next review after |
-|---|---|
-| New | due immediately |
-| 1 / 2 / 3 / 4 | 4 hours / 8 hours / 1 day / 2 days |
-| 5 / 6 | 1 week / 2 weeks |
-| 7 | 1 month |
-| 8 | 4 months |
-| 9 | never reviewed again (burned) |
-
-## Data storage
-
-Everything is stored in the browser's `localStorage`, per device. It survives
-refreshes, restarts and clearing the browser cache, but not clearing site data.
-Decks start as copies of a template and are then fully the user's own.
-Stored data is versioned, and unreadable data is reported rather than overwritten.
