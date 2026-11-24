@@ -116,6 +116,28 @@ describe("ReviewEngine", () => {
     expect(engine.stageCounts()).toEqual([2, 0, 0, 0, 0, 1, 0, 0, 0, 1]);
   });
 
+  it("skips pairs with no answers until they get one", () => {
+    const deck = makeDeck([["q1", "AB", []], ["q2", "AC", ["x"]]]);
+    const pairs = [makePair("q1", { nextDueAt: 0 }), makePair("q2", { nextDueAt: 50 })];
+    const engine = new ReviewEngine(deck, pairs, config);
+
+    expect(engine.getDuePair(100)?.id).toBe("q2");
+    expect(engine.dueCount(100)).toBe(1);
+    expect(engine.unansweredCount()).toBe(1);
+    expect(engine.stageCounts()[0]).toBe(1);
+    expect(() => engine.recordPass("q1", 0, null, 100)).toThrow(/no answers/);
+
+    deck.items[0]!.answers.push("Abbey");
+    expect(engine.getDuePair(100)?.id).toBe("q1");
+    expect(engine.unansweredCount()).toBe(0);
+  });
+
+  it("ignores unanswered pairs when reporting the next due time", () => {
+    const deck = makeDeck([["q1", "AB", []], ["q2", "AC", ["x"]]]);
+    const engine = new ReviewEngine(deck, [makePair("q1", { nextDueAt: 10 }), makePair("q2", { nextDueAt: 500 })], config);
+    expect(engine.msUntilNextDue(0)).toBe(500);
+  });
+
   it("session stats", () => {
     const base = { term: "T", stageBefore: 0, stageAfter: 1, elapsedMs: 0, timeoutMs: 0, reviewedAt: 0, userAnswer: null };
     const stats = ReviewEngine.getSessionStats([

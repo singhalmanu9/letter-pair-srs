@@ -3,6 +3,7 @@
 import { DEFAULT_CONFIG, type AppConfig } from "./config";
 import {
   ReviewResult,
+  hasAnswers,
   recordAnswer,
   validateDeck,
   validatePairConsistency,
@@ -49,12 +50,19 @@ export class ReviewEngine {
     }
   }
 
+  /** Not burned and has at least one answer. */
+  isReviewable(pair: PairState): boolean {
+    const item = this.itemById.get(pair.pairId);
+    return pair.nextDueAt !== null && item !== undefined && hasAnswers(item);
+  }
+
   /** Earliest-due pair state among currently due pairs. */
   getDuePairState(now: number): PairState | null {
     let earliest: PairState | null = null;
     for (const pair of this.pairs) {
-      if (pair.nextDueAt === null || pair.nextDueAt > now) continue;
-      if (earliest === null || pair.nextDueAt < (earliest.nextDueAt as number)) earliest = pair;
+      const due = pair.nextDueAt;
+      if (due === null || due > now || !this.isReviewable(pair)) continue;
+      if (earliest === null || due < (earliest.nextDueAt as number)) earliest = pair;
     }
     return earliest;
   }
@@ -70,21 +78,32 @@ export class ReviewEngine {
   }
 
   dueCount(now: number): number {
-    return this.pairs.filter((p) => p.nextDueAt !== null && p.nextDueAt <= now).length;
+    return this.pairs.filter((p) => this.isReviewable(p) && (p.nextDueAt as number) <= now).length;
   }
 
   /** Milliseconds until the next pair is due, or null if nothing is scheduled. */
   msUntilNextDue(now: number): number | null {
-    const times = this.pairs.map((p) => p.nextDueAt).filter((t): t is number => t !== null);
+    const times = this.pairs.filter((p) => this.isReviewable(p)).map((p) => p.nextDueAt as number);
     if (times.length === 0) return null;
     return Math.max(0, Math.min(...times) - now);
   }
 
-  /** Number of pairs at each stage, indexed by stage number (0 = new … last = burned). */
+  /**
+   * Number of pairs at each stage, indexed by stage number (0 = new … last =
+   * burned). Pairs without answers are left out; see `unansweredCount`.
+   */
   stageCounts(): number[] {
     const counts = new Array<number>(burnedStage(this.config.srs) + 1).fill(0);
-    for (const pair of this.pairs) counts[pair.stage] = (counts[pair.stage] ?? 0) + 1;
+    for (const pair of this.pairs) {
+      const item = this.itemById.get(pair.pairId);
+      if (item && hasAnswers(item)) counts[pair.stage] = (counts[pair.stage] ?? 0) + 1;
+    }
     return counts;
+  }
+
+  /** Pairs in the deck that have no answers yet. */
+  unansweredCount(): number {
+    return this.deck.items.filter((item) => !hasAnswers(item)).length;
   }
 
   recordPass(pairId: string, elapsedMs: number, userAnswer: string | null, now: number): ReviewEvent {
@@ -153,6 +172,7 @@ export class ReviewEngine {
     const pair = this.pairById.get(pairId);
     if (!pair) throw new Error(`Unknown pair: ${pairId}`);
     if (pair.nextDueAt === null) throw new Error(`Pair ${pairId} is burned and can't be reviewed`);
+    if (!this.isReviewable(pair)) throw new Error(`Pair ${pairId} has no answers and can't be reviewed`);
     return pair;
   }
 

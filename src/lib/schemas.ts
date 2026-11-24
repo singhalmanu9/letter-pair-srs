@@ -10,7 +10,10 @@ export const ReviewResult = {
 } as const;
 export type ReviewResult = (typeof ReviewResult)[keyof typeof ReviewResult];
 
-/** One letter pair and the answers (images/words) the user accepts for it. */
+/**
+ * One letter pair and the answers (images/words) the user accepts for it.
+ * A pair with no answers yet stays in the deck but isn't reviewed.
+ */
 export interface DeckItem {
   id: string;
   term: string;
@@ -118,7 +121,6 @@ export function parseDeckItem(value: unknown, path = "item"): DeckItem {
   const answers = array(o.answers, `${path}.answers`).map((a, i) =>
     string(a, `${path}.answers[${i}]`, { nonEmpty: true }),
   );
-  if (answers.length === 0) fail(`${path}.answers`, "must contain at least one answer");
   return {
     id: string(o.id, `${path}.id`, { nonEmpty: true }),
     term: string(o.term, `${path}.term`, { nonEmpty: true }),
@@ -253,17 +255,23 @@ export function addAnswerToPair(deck: Deck, pairId: string, answer: string, now:
 
 /**
  * Remove an accepted answer from a pair. Returns false if the pair or answer
- * doesn't exist, or if it's the pair's last answer (every pair needs one).
+ * doesn't exist. Removing the last answer takes the pair out of reviews
+ * (its progress is kept).
  */
 export function removeAnswerFromPair(deck: Deck, pairId: string, answer: string, now: number): boolean {
   const item = getItemById(deck, pairId);
-  if (!item || item.answers.length <= 1) return false;
+  if (!item) return false;
   const index = item.answers.indexOf(answer);
   if (index === -1) return false;
   item.answers.splice(index, 1);
   item.updatedAt = now;
   deck.updatedAt = now;
   return true;
+}
+
+/** Whether a pair has any answers, i.e. can be reviewed. */
+export function hasAnswers(item: DeckItem): boolean {
+  return item.answers.length > 0;
 }
 
 /** Normalized form used to match terms (case- and whitespace-insensitive). */

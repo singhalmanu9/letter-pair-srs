@@ -204,6 +204,18 @@ describe("import: deck lists", () => {
     });
   });
 
+  it("accepts pairs with no answers yet (term only, empty or missing answers)", async () => {
+    const list = { items: [{ term: "AB", answers: ["Abbey"] }, { term: "AC", answers: [] }, { term: "AD" }] };
+    const repo = new Repository(new MemoryStore());
+    const { result } = await importText(repo, JSON.stringify(list));
+    const deck = (await repo.getDeck(result.imported[0]!))!;
+    expect(deck.items.map((i) => [i.term, i.answers])).toEqual([
+      ["AB", ["Abbey"]],
+      ["AC", []],
+      ["AD", []],
+    ]);
+  });
+
   it("importing the same list twice creates two independent decks", async () => {
     const repo = new Repository(new MemoryStore());
     const text = JSON.stringify({ items: [{ term: "AB", answers: ["Abbey"] }] });
@@ -218,7 +230,9 @@ describe("import: deck lists", () => {
     expect(() => parseImport("[]")).toThrow(/Unrecognized/);
     expect(() => parseImport(JSON.stringify({ hello: 1 }))).toThrow(/Unrecognized/);
     expect(() => parseImport(JSON.stringify({ items: [] }))).toThrow(/no items/);
-    expect(() => parseImport(JSON.stringify({ items: [{ term: "AB", answers: [] }] }))).toThrow("AB has no answers.");
+    expect(() => parseImport(JSON.stringify({ items: [{ term: "AB", answers: "Abbey" }] }))).toThrow(
+      "AB: answers must be a list.",
+    );
     expect(() => parseImport(JSON.stringify({ items: [{ answers: ["x"] }] }))).toThrow("Item 1 has no term.");
 
     const dupes = parseImport(JSON.stringify({ items: [{ term: "AB", answers: ["x"] }, { term: "ab", answers: ["y"] }] }));

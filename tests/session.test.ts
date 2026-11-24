@@ -140,6 +140,11 @@ describe("SessionController", () => {
       expect(pair("q2").failCount).toBe(1);
     });
 
+    it("ignores a snapshot whose pair has lost all its answers", () => {
+      session.engine.deck.items.find((i) => i.id === "q2")!.answers.length = 0;
+      expect(session.restoreActiveReview(snap(), 0)).toBe(false);
+    });
+
     it("ignores snapshots for another deck, a missing pair, or a burned pair", () => {
       expect(session.restoreActiveReview(snap({ deckId: "other" }), 0)).toBe(false);
       expect(session.restoreActiveReview(snap({ pairId: "gone" }), 0)).toBe(false);

@@ -153,6 +153,7 @@ async function main(): Promise<void> {
     summary.textContent =
       `${deck.name}: ${deck.items.length} pairs, ${engine.dueCount(Date.now())} due now. ` +
       `Stages: ${stages || "none"}. ` +
+      (engine.unansweredCount() ? `${engine.unansweredCount()} without answers yet. ` : "") +
       (otherDecks > 0 ? `(${otherDecks} other deck${otherDecks === 1 ? "" : "s"} stored.) ` : "") +
       `Storage: ${durable ? "localStorage" : "memory only (will not survive reload)"}` +
       `${persistent ? ", persistent" : ""}.`;

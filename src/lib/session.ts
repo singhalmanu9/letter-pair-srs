@@ -77,7 +77,7 @@ export class SessionController {
   /**
    * Resume a review saved before a reload. The countdown restarts in full.
    * Returns false (and restores nothing) if the snapshot belongs to another
-   * deck or its pair no longer exists or isn't reviewable.
+   * deck or its pair no longer exists or isn't reviewable (burned or no answers).
    */
   restoreActiveReview(snapshot: ActiveReviewSnapshot | null, now: number): boolean {
     if (snapshot === null) return false;
@@ -86,7 +86,7 @@ export class SessionController {
 
     const item = this.engine.getItem(snapshot.pairId);
     const pair = this.engine.pairs.find((p) => p.pairId === snapshot.pairId);
-    if (!item || !pair || pair.nextDueAt === null) return false;
+    if (!item || !pair || !this.engine.isReviewable(pair)) return false;
 
     this.activeReview = {
       pairId: item.id,

@@ -4,8 +4,9 @@
  * Two kinds of file are accepted:
  * - Backup: every deck with its progress and review history, as exported
  *   by this app. Restores exactly.
- * - Deck list: `{ name?, items: [{ term, answers }] }`. This also covers the
+ * - Deck list: `{ name?, items: [{ term, answers? }] }`. This also covers the
  *   original Python app's deck.json. Becomes a new deck with fresh progress.
+ *   Items may have no answers yet.
  *
  * Importing is two-phase: `planImport` validates everything and reports
  * conflicts without writing; `applyImport` then writes. A file that fails
@@ -148,11 +149,12 @@ function parseDeckList(o: Record<string, unknown>, fileName?: string): DeckTempl
     const r = raw as Record<string, unknown>;
     if (typeof r.term !== "string" || r.term.trim() === "") throw new ImportError(`${row} has no term.`);
     const term = r.term.trim();
-    if (!Array.isArray(r.answers)) throw new ImportError(`${term} has no answers list.`);
-    const answers = [
-      ...new Set(r.answers.filter((a): a is string => typeof a === "string").map((a) => a.trim())),
-    ].filter((a) => a !== "");
-    if (answers.length === 0) throw new ImportError(`${term} has no answers.`);
+    // Answers are optional: pairs without any are kept but not reviewed yet.
+    if (r.answers !== undefined && !Array.isArray(r.answers)) throw new ImportError(`${term}: answers must be a list.`);
+    const given: unknown[] = Array.isArray(r.answers) ? r.answers : [];
+    const answers = [...new Set(given.filter((a): a is string => typeof a === "string").map((a) => a.trim()))].filter(
+      (a) => a !== "",
+    );
     return { term, answers };
   });
   if (items.length === 0) throw new ImportError("This deck list has no items.");

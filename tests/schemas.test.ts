@@ -4,6 +4,7 @@ import {
   ValidationError,
   addAnswerToPair,
   getItemById,
+  hasAnswers,
   mostCommonAnswer,
   parseActiveReviewSnapshot,
   parseDeck,
@@ -30,10 +31,14 @@ describe("parsing", () => {
     expect(parseDeck(roundtrip(makeDeck([]))).items).toEqual([]);
   });
 
-  it("rejects decks with missing fields, empty answers or duplicate terms", () => {
+  it("allows pairs with no answers yet", () => {
+    expect(parseDeck(roundtrip(makeDeck([["q1", "AC", []]]))).items[0]!.answers).toEqual([]);
+  });
+
+  it("rejects decks with missing fields, blank answers or duplicate terms", () => {
     const deck = makeDeck([["q1", "AC"]]) as unknown as Record<string, unknown>;
     expect(() => parseDeck({ ...deck, name: undefined })).toThrow(/deck\.name/);
-    expect(() => parseDeck(roundtrip(makeDeck([["q1", "AC", []]])))).toThrow(/at least one answer/);
+    expect(() => parseDeck(roundtrip(makeDeck([["q1", "AC", ["  "]]])))).toThrow(/must not be empty/);
     expect(() => parseDeck(roundtrip(makeDeck([["q1", "AC"], ["q2", "ac"]])))).toThrow(/Duplicate term/);
     expect(() => parseDeck(roundtrip(makeDeck([["q1", "AC"], ["q1", "BD"]])))).toThrow(/Duplicate item id/);
   });
@@ -119,9 +124,14 @@ describe("removing answers", () => {
     expect(deck.updatedAt).toBe(70);
   });
 
-  it("refuses to remove the last answer, a missing answer, or from a missing pair", () => {
+  it("can remove the last answer, leaving the pair unanswered", () => {
     const deck = makeDeck([["q1", "AC", ["Andy Capp"]]]);
-    expect(removeAnswerFromPair(deck, "q1", "Andy Capp", 70)).toBe(false);
+    expect(removeAnswerFromPair(deck, "q1", "Andy Capp", 70)).toBe(true);
+    expect(hasAnswers(deck.items[0]!)).toBe(false);
+  });
+
+  it("ignores a missing answer or a missing pair", () => {
+    const deck = makeDeck([["q1", "AC", ["Andy Capp"]]]);
     expect(removeAnswerFromPair(deck, "q1", "nope", 70)).toBe(false);
     expect(removeAnswerFromPair(deck, "zz", "Andy Capp", 70)).toBe(false);
     expect(deck.items[0]!.answers).toEqual(["Andy Capp"]);
