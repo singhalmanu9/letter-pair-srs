@@ -4,10 +4,6 @@ const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 
 export interface SrsStage {
-  /** Display name, e.g. "Apprentice 2". */
-  name: string;
-  /** Display group, e.g. "Apprentice". */
-  group: string;
   /** How long a pair waits before its next review after reaching this stage. */
   intervalMs: number;
 }
@@ -16,7 +12,8 @@ export interface SrsConfig {
   /**
    * Review stages in order. A pair's stage number is 0 when it is new (due
    * immediately), 1..stages.length while it is being learned, and
-   * stages.length + 1 once it is burned (never reviewed again).
+   * stages.length + 1 once it is burned (never reviewed again). Stages are
+   * shown as "Level <n>", so with 8 stages the burned level is Level 9.
    */
   stages: readonly SrsStage[];
   /** Stage number from which a fail drops two stages instead of one. */
@@ -30,19 +27,19 @@ export interface AppConfig {
   shortcuts: { reveal: string; pass: string; fail: string; next: string };
 }
 
-/** WaniKani's fixed schedule. */
+/** WaniKani's fixed schedule, as Levels 1-8 (Level 9 = burned). */
 export const WANIKANI_SRS: SrsConfig = {
   stages: [
-    { name: "Apprentice 1", group: "Apprentice", intervalMs: 4 * HOUR },
-    { name: "Apprentice 2", group: "Apprentice", intervalMs: 8 * HOUR },
-    { name: "Apprentice 3", group: "Apprentice", intervalMs: 1 * DAY },
-    { name: "Apprentice 4", group: "Apprentice", intervalMs: 2 * DAY },
-    { name: "Guru 1", group: "Guru", intervalMs: 7 * DAY },
-    { name: "Guru 2", group: "Guru", intervalMs: 14 * DAY },
-    { name: "Master", group: "Master", intervalMs: 30 * DAY },
-    { name: "Enlightened", group: "Enlightened", intervalMs: 120 * DAY },
+    { intervalMs: 4 * HOUR }, // Level 1
+    { intervalMs: 8 * HOUR }, // Level 2
+    { intervalMs: 1 * DAY }, // Level 3
+    { intervalMs: 2 * DAY }, // Level 4
+    { intervalMs: 7 * DAY }, // Level 5
+    { intervalMs: 14 * DAY }, // Level 6
+    { intervalMs: 30 * DAY }, // Level 7
+    { intervalMs: 120 * DAY }, // Level 8
   ],
-  // Guru 1 and above drop two stages on a fail; Apprentice drops one.
+  // Level 5 and above drop two levels on a fail; Levels 1-4 drop one.
   heavyPenaltyFromStage: 5,
 };
 

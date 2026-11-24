@@ -234,7 +234,7 @@ describe("updating an existing deck from a deck list", () => {
     items: items.map(([term, answers]) => ({ term, answers })),
   });
 
-  /** Sample deck with one reviewed pair (AC at Apprentice 1). */
+  /** Sample deck with one reviewed pair (AC at Level 1). */
   async function setup() {
     const seeded = await seededRepo();
     const deck = (await seeded.repo.getDeck(seeded.deckId))!;

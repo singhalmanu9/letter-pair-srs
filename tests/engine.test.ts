@@ -61,13 +61,13 @@ describe("ReviewEngine", () => {
     });
   });
 
-  it("first pass of a new pair schedules Apprentice 1 (4 hours)", () => {
+  it("first pass of a new pair schedules Level 1 (4 hours)", () => {
     const pair = makePair("q1");
     engineFor([pair]).recordPass("q1", 0, null, 0);
     expect(pair).toMatchObject({ stage: 1, nextDueAt: 4 * HOUR });
   });
 
-  it("passing Enlightened burns the pair", () => {
+  it("passing Level 8 burns the pair (Level 9)", () => {
     const pair = makePair("q1", { stage: 8 });
     engineFor([pair]).recordPass("q1", 0, null, 0);
     expect(pair).toMatchObject({ stage: 9, nextDueAt: null });

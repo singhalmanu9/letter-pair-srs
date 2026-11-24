@@ -34,17 +34,18 @@ npm run build      # type-check and build to dist/
 
 ## How reviews are scheduled
 
-Scheduling uses WaniKani's fixed stages. A pass moves a pair up one stage; a
-fail or timeout drops it one stage (two from Guru up), never below Apprentice 1.
+Scheduling uses WaniKani's fixed intervals as Levels 1-9. A pass moves a pair
+up one level; a fail or timeout drops it one level (two from Level 5 up), never
+below Level 1.
 
-| Stage | Next review after |
+| Level | Next review after |
 |---|---|
 | New | due immediately |
-| Apprentice 1 / 2 / 3 / 4 | 4 hours / 8 hours / 1 day / 2 days |
-| Guru 1 / 2 | 1 week / 2 weeks |
-| Master | 1 month |
-| Enlightened | 4 months |
-| Burned | never reviewed again |
+| 1 / 2 / 3 / 4 | 4 hours / 8 hours / 1 day / 2 days |
+| 5 / 6 | 1 week / 2 weeks |
+| 7 | 1 month |
+| 8 | 4 months |
+| 9 | never reviewed again (burned) |
 
 ## Data storage
 

@@ -27,14 +27,14 @@ describe("WaniKani schedule", () => {
     expect(nextDueAt(9, 1234, srs)).toBeNull();
   });
 
-  it("apprentice fails drop one stage, never below Apprentice 1", () => {
+  it("fails at levels 1-4 drop one level, never below Level 1", () => {
     expect(stageAfterFail(0, srs)).toBe(1);
     expect(stageAfterFail(1, srs)).toBe(1);
     expect(stageAfterFail(2, srs)).toBe(1);
     expect(stageAfterFail(4, srs)).toBe(3);
   });
 
-  it("guru and above fails drop two stages", () => {
+  it("fails from level 5 up drop two levels", () => {
     expect(stageAfterFail(5, srs)).toBe(3);
     expect(stageAfterFail(6, srs)).toBe(4);
     expect(stageAfterFail(7, srs)).toBe(5);
@@ -43,9 +43,9 @@ describe("WaniKani schedule", () => {
 
   it("names stages", () => {
     expect(stageName(0, srs)).toBe("New");
-    expect(stageName(1, srs)).toBe("Apprentice 1");
-    expect(stageName(5, srs)).toBe("Guru 1");
-    expect(stageName(8, srs)).toBe("Enlightened");
-    expect(stageName(9, srs)).toBe("Burned");
+    expect(stageName(1, srs)).toBe("Level 1");
+    expect(stageName(5, srs)).toBe("Level 5");
+    expect(stageName(8, srs)).toBe("Level 8");
+    expect(stageName(9, srs)).toBe("Level 9");
   });
 });

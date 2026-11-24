@@ -19,7 +19,7 @@ export function stageAfterPass(stage: number, config: SrsConfig): number {
 
 /**
  * A fail drops the pair one stage, or two from `heavyPenaltyFromStage` up,
- * but never below the first learning stage. Matches WaniKani for a single
+ * but never below Level 1. Matches WaniKani for a single
  * incorrect answer.
  */
 export function stageAfterFail(stage: number, config: SrsConfig): number {
@@ -36,8 +36,8 @@ export function nextDueAt(stage: number, now: number, config: SrsConfig): number
   return now + entry.intervalMs;
 }
 
+/** "New" for unreviewed pairs, otherwise "Level <n>" (the last level is burned). */
 export function stageName(stage: number, config: SrsConfig): string {
   if (stage === NEW_STAGE) return "New";
-  if (isBurned(stage, config)) return "Burned";
-  return config.stages[stage - 1]?.name ?? `Stage ${stage}`;
+  return `Level ${Math.min(stage, burnedStage(config))}`;
 }
