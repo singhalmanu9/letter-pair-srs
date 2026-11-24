@@ -8,6 +8,7 @@
  *   lpsrs:progress:<id>        PairState[]
  *   lpsrs:history:<id>         ReviewEvent[] (append-only)
  *   lpsrs:activeReview         ActiveReviewSnapshot
+ *   lpsrs:settings             Settings
  *
  * Corrupt or invalid data is never silently overwritten: reads throw a
  * CorruptDataError naming the key, and the app decides what to do.
@@ -23,6 +24,7 @@ import {
   type PairState,
   type ReviewEvent,
 } from "./schemas";
+import { DEFAULT_CONFIG, DEFAULT_TIMER, type AppConfig, type TimerConfig } from "./config";
 import type { AsyncKeyValueStore } from "./storage";
 
 export const SCHEMA_VERSION = 1;
@@ -36,7 +38,23 @@ export const KEYS = {
   progress: (id: string) => `${PREFIX}progress:${id}`,
   history: (id: string) => `${PREFIX}history:${id}`,
   activeReview: `${PREFIX}activeReview`,
+  settings: `${PREFIX}settings`,
 } as const;
+
+/** User preferences. Missing fields fall back to defaults, so new settings need no migration. */
+export interface Settings {
+  timer: TimerConfig;
+  sessionLimit: number | null;
+  /** When the user last exported a backup, for a quiet reminder in Settings. */
+  lastBackupAt: number | null;
+}
+
+export const DEFAULT_SETTINGS: Settings = { timer: DEFAULT_TIMER, sessionLimit: null, lastBackupAt: null };
+
+/** Runtime config for the given settings. */
+export function configFromSettings(settings: Settings): AppConfig {
+  return { ...DEFAULT_CONFIG, timer: settings.timer, sessionLimit: settings.sessionLimit };
+}
 
 export interface Meta {
   schemaVersion: number;
@@ -183,6 +201,16 @@ export class Repository {
     await this.store.remove(KEYS.activeReview);
   }
 
+  // --- Settings --------------------------------------------------------------
+
+  async getSettings(): Promise<Settings> {
+    return (await this.readParsed(KEYS.settings, parseSettings)) ?? structuredClone(DEFAULT_SETTINGS);
+  }
+
+  async saveSettings(settings: Settings): Promise<void> {
+    await this.write(KEYS.settings, parseSettings(settings));
+  }
+
   // --- Maintenance -----------------------------------------------------------
 
   /** Remove everything this app has stored. */
@@ -215,6 +243,29 @@ function parseMeta(value: unknown): Meta {
     throw new Error("meta.activeDeckId must be a string or null");
   }
   return { schemaVersion: o.schemaVersion, activeDeckId: o.activeDeckId };
+}
+
+function parseSettings(value: unknown): Settings {
+  if (typeof value !== "object" || value === null) throw new Error("settings must be an object");
+  const o = value as Record<string, unknown>;
+  const t = (typeof o.timer === "object" && o.timer !== null ? o.timer : {}) as Record<string, unknown>;
+  const ms = (v: unknown, fallback: number) =>
+    typeof v === "number" && Number.isFinite(v) && v >= 500 && v <= 600_000 ? Math.round(v) : fallback;
+  const d = DEFAULT_TIMER;
+  const limit = o.sessionLimit;
+  return {
+    timer: {
+      mode: t.mode === "dynamic" ? "dynamic" : "static",
+      staticMs: ms(t.staticMs, d.staticMs),
+      dynamicStartMs: ms(t.dynamicStartMs, d.dynamicStartMs),
+      dynamicStepMs: typeof t.dynamicStepMs === "number" && t.dynamicStepMs >= 0 && t.dynamicStepMs <= 60_000
+        ? Math.round(t.dynamicStepMs)
+        : d.dynamicStepMs,
+      dynamicMinMs: ms(t.dynamicMinMs, d.dynamicMinMs),
+    },
+    sessionLimit: typeof limit === "number" && Number.isInteger(limit) && limit > 0 ? limit : null,
+    lastBackupAt: typeof o.lastBackupAt === "number" ? o.lastBackupAt : null,
+  };
 }
 
 function parseIdList(value: unknown): string[] {

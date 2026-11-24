@@ -18,7 +18,11 @@ export interface ActiveReview {
   /** Accepted answers. Empty means the user must come up with one. */
   answers: string[];
   timer: ReviewTimer;
-  revealed: boolean;
+  /**
+   * When the user revealed the answers (or started typing one). The timer
+   * measures recall only, so it stops here and can no longer time out.
+   */
+  revealedAt: number | null;
 }
 
 /**
@@ -49,27 +53,43 @@ export class SessionController {
     const due = this.engine.getDuePair(now);
     if (!due) return null;
 
-    this.activeReview = {
-      pairId: due.id,
-      term: due.term,
-      answers: [...due.answers],
-      timer: new ReviewTimer(now, this.engine.config.timeoutMs),
-      revealed: false,
-    };
+    this.activeReview = this.makeActive(due, now, null);
     this.persistActiveReview();
     return due;
   }
 
+  /** Remaining recall time, frozen once revealed. Null when nothing is active. */
   timeRemaining(now: number): number | null {
-    return this.activeReview ? this.activeReview.timer.remaining(now) : null;
+    const active = this.activeReview;
+    if (!active) return null;
+    return active.timer.remaining(active.revealedAt ?? now);
   }
 
+  /** Stop the recall timer and show the answers. Throws if already timed out. */
   revealAnswers(now: number): string[] {
     const active = this.ensureActive();
-    this.enforceNotTimedOut(now);
-    active.revealed = true;
-    this.persistActiveReview();
+    if (active.revealedAt === null) {
+      this.enforceNotTimedOut(now);
+      active.revealedAt = now;
+      this.persistActiveReview();
+    }
     return [...active.answers];
+  }
+
+  /** Give the current pair a fresh countdown (e.g. returning to the app). No-op once revealed. */
+  restartTimer(now: number): void {
+    const active = this.activeReview;
+    if (active && active.revealedAt === null) {
+      active.timer = new ReviewTimer(now, active.timer.timeoutMs);
+      this.persistActiveReview();
+    }
+  }
+
+  /** Quit mid-review: drop the current pair without recording anything. */
+  abandonActiveReview(): void {
+    if (!this.activeReview) return;
+    this.activeReview = null;
+    this.callbacks.clearActiveReview?.();
   }
 
   activeReviewSnapshot(): ActiveReviewSnapshot | null {
@@ -79,14 +99,14 @@ export class SessionController {
       deckId: this.engine.deck.id,
       pairId: active.pairId,
       startedAt: active.timer.startedAt,
-      revealed: active.revealed,
+      revealed: active.revealedAt !== null,
     };
   }
 
   /**
    * Resume a review saved before a reload. The countdown restarts in full.
    * Returns false (and restores nothing) if the snapshot belongs to another
-   * deck or its pair no longer exists or isn't reviewable (burned or no answers).
+   * deck or its pair no longer exists or is burned.
    */
   restoreActiveReview(snapshot: ActiveReviewSnapshot | null, now: number): boolean {
     if (snapshot === null) return false;
@@ -94,67 +114,88 @@ export class SessionController {
     if (snapshot.deckId !== this.engine.deck.id) return false;
 
     const item = this.engine.getItem(snapshot.pairId);
-    const pair = this.engine.pairs.find((p) => p.pairId === snapshot.pairId);
+    const pair = this.engine.getPairState(snapshot.pairId);
     if (!item || !pair || !this.engine.isReviewable(pair)) return false;
 
-    this.activeReview = {
-      pairId: item.id,
-      term: item.term,
-      answers: [...item.answers],
-      timer: new ReviewTimer(now, this.engine.config.timeoutMs),
-      revealed: snapshot.revealed,
-    };
+    this.activeReview = this.makeActive(item, now, snapshot.revealed ? now : null);
     return true;
   }
 
+  /** Recalled one of the accepted answers (requires reveal): up one level. */
   gradePass(userAnswer: string | null, now: number): ReviewEvent {
-    const active = this.ensureReadyForGrading(now);
-    const event = this.engine.recordPass(active.pairId, active.timer.elapsed(now), userAnswer, now);
-    this.finalizeEvent(event);
-    return event;
+    const active = this.ensureRevealed();
+    return this.finalizeEvent(this.engine.recordPass(active.pairId, this.elapsed(active, now), userAnswer, now));
   }
 
+  /** Didn't get it (requires reveal). */
   gradeFail(userAnswer: string | null, now: number): ReviewEvent {
-    const active = this.ensureReadyForGrading(now);
-    const event = this.engine.recordFail(active.pairId, active.timer.elapsed(now), userAnswer, now);
-    this.finalizeEvent(event);
-    return event;
+    const active = this.ensureRevealed();
+    return this.finalizeEvent(this.engine.recordFail(active.pairId, this.elapsed(active, now), userAnswer, now));
   }
 
   /**
-   * The user came up with an answer that isn't one of the accepted ones: save
-   * it as a new accepted answer and grade the review a pass. For a pair with
-   * no answers this is the only way to pass, and needs no reveal; otherwise
-   * the answers must have been revealed first. Throws on a blank answer.
+   * "Something else" on a pair that has answers (requires reveal): the typed
+   * answer is saved to the deck, and the pair keeps its level. Typing one of
+   * the accepted answers counts as a normal pass.
+   */
+  submitOther(answer: string, now: number): ReviewEvent {
+    const active = this.ensureRevealed();
+    if (active.answers.length === 0) throw new Error("This pair has no answers yet; use submitNewAnswer");
+    const trimmed = this.requireAnswer(answer);
+    if (active.answers.includes(trimmed)) return this.gradePass(trimmed, now);
+    this.addToDeck(active, trimmed, now);
+    return this.finalizeEvent(this.engine.recordOther(active.pairId, this.elapsed(active, now), trimmed, now));
+  }
+
+  /**
+   * First answer for a pair with none: saved to the deck and graded a pass.
+   * Needs no reveal; throws if the recall time ran out before typing began.
    */
   submitNewAnswer(answer: string, now: number): ReviewEvent {
     const active = this.ensureActive();
-    const trimmed = answer.trim();
-    if (trimmed === "") throw new Error("Answer can't be blank");
-    if (active.answers.length > 0 && !active.revealed) throw new Error("Must reveal answers before grading");
-    this.enforceNotTimedOut(now);
-
-    const deck = this.engine.deck;
-    if (addAnswerToPair(deck, active.pairId, trimmed, now)) this.callbacks.saveDeck?.(deck);
-    active.answers = [...(this.engine.getItem(active.pairId)?.answers ?? [trimmed])];
-
-    const event = this.engine.recordPass(active.pairId, active.timer.elapsed(now), trimmed, now);
-    this.finalizeEvent(event);
-    return event;
+    if (active.answers.length > 0) throw new Error("This pair already has answers; use submitOther");
+    const trimmed = this.requireAnswer(answer);
+    if (active.revealedAt === null) this.enforceNotTimedOut(now);
+    this.addToDeck(active, trimmed, now);
+    return this.finalizeEvent(this.engine.recordPass(active.pairId, this.elapsed(active, now), trimmed, now));
   }
 
-  /** Auto-fail and finalize if the active review has timed out. */
+  /** Auto-fail and finalize if the recall time ran out (never after reveal). */
   checkTimeout(now: number): ReviewEvent | null {
     const active = this.activeReview;
-    if (!active || !active.timer.isTimedOut(now)) return null;
-
-    const event = this.engine.recordTimeout(active.pairId, now);
-    this.finalizeEvent(event);
-    return event;
+    if (!active || active.revealedAt !== null || !active.timer.isTimedOut(now)) return null;
+    return this.finalizeEvent(this.engine.recordTimeout(active.pairId, now, active.timer.timeoutMs));
   }
 
   getSessionStats(): SessionStats {
     return ReviewEngine.getSessionStats(this.reviewedEvents);
+  }
+
+  private makeActive(item: DeckItem, now: number, revealedAt: number | null): ActiveReview {
+    return {
+      pairId: item.id,
+      term: item.term,
+      answers: [...item.answers],
+      timer: new ReviewTimer(now, this.engine.timeoutFor(item.id)),
+      revealedAt,
+    };
+  }
+
+  /** Recall time: from start until reveal (or now, if not revealed). */
+  private elapsed(active: ActiveReview, now: number): number {
+    return active.timer.elapsed(active.revealedAt ?? now);
+  }
+
+  private requireAnswer(answer: string): string {
+    const trimmed = answer.trim();
+    if (trimmed === "") throw new Error("Answer can't be blank");
+    return trimmed;
+  }
+
+  private addToDeck(active: ActiveReview, answer: string, now: number): void {
+    const deck = this.engine.deck;
+    if (addAnswerToPair(deck, active.pairId, answer, now)) this.callbacks.saveDeck?.(deck);
+    active.answers = [...(this.engine.getItem(active.pairId)?.answers ?? [answer])];
   }
 
   private ensureActive(): ActiveReview {
@@ -166,19 +207,19 @@ export class SessionController {
     if (this.checkTimeout(now)) throw new Error("Active review already timed out");
   }
 
-  private ensureReadyForGrading(now: number): ActiveReview {
+  private ensureRevealed(): ActiveReview {
     const active = this.ensureActive();
-    if (!active.revealed) throw new Error("Must reveal answers before grading");
-    this.enforceNotTimedOut(now);
+    if (active.revealedAt === null) throw new Error("Must reveal answers before grading");
     return active;
   }
 
-  private finalizeEvent(event: ReviewEvent): void {
+  private finalizeEvent(event: ReviewEvent): ReviewEvent {
     this.reviewedEvents.push(event);
     this.callbacks.appendEvent?.(event);
     this.callbacks.saveProgress?.(this.engine.pairs);
     this.callbacks.clearActiveReview?.();
     this.activeReview = null;
+    return event;
   }
 
   private persistActiveReview(): void {

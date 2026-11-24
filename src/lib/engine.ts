@@ -1,6 +1,7 @@
 /** Core review engine: due selection and stage transitions. */
 
-import { DEFAULT_CONFIG, type AppConfig } from "./config";
+import { DEFAULT_CONFIG, timeoutForStage, type AppConfig } from "./config";
+import { resetIfUnanswered } from "./progress";
 import {
   ReviewResult,
   hasAnswers,
@@ -12,7 +13,6 @@ import {
   type PairState,
   type ReviewEvent,
 } from "./schemas";
-import { resetIfUnanswered } from "./progress";
 import { burnedStage, NEW_STAGE, nextDueAt, stageAfterFail, stageAfterPass } from "./srs";
 
 /** Trim a typed answer; blank becomes null. */
@@ -25,6 +25,8 @@ export interface SessionStats {
   total: number;
   passed: number;
   failed: number;
+  /** "Something else": recalled an answer that wasn't one of the usual ones. */
+  other: number;
   timedOut: number;
   responses: number;
   /** Passes over all reviews, timeouts included. */
@@ -68,6 +70,19 @@ export class ReviewEngine {
     return item !== undefined && !hasAnswers(item);
   }
 
+  getItem(pairId: string): DeckItem | undefined {
+    return this.itemById.get(pairId);
+  }
+
+  getPairState(pairId: string): PairState | undefined {
+    return this.pairById.get(pairId);
+  }
+
+  /** Recall time allowed for a pair, based on its current level and the timer settings. */
+  timeoutFor(pairId: string): number {
+    return timeoutForStage(this.pairById.get(pairId)?.stage ?? NEW_STAGE, this.config.timer);
+  }
+
   /**
    * Call after a pair's answers change. A pair left with no answers goes back
    * to New and becomes due now. Returns whether the pair's state changed.
@@ -98,10 +113,6 @@ export class ReviewEngine {
     return due ? (this.itemById.get(due.pairId) ?? null) : null;
   }
 
-  getItem(pairId: string): DeckItem | undefined {
-    return this.itemById.get(pairId);
-  }
-
   dueCount(now: number): number {
     return this.pairs.filter((p) => p.nextDueAt !== null && p.nextDueAt <= now).length;
   }
@@ -126,8 +137,9 @@ export class ReviewEngine {
   }
 
   /**
-   * A pass requires the pair to have an accepted answer. For a pair with none,
-   * add the user's answer to the deck first (see SessionController.submitNewAnswer).
+   * Recalled one of the pair's answers: up one level. Requires the pair to
+   * have an answer; for a pair with none, add the user's answer to the deck
+   * first (see SessionController.submitNewAnswer).
    */
   recordPass(pairId: string, elapsedMs: number, userAnswer: string | null, now: number): ReviewEvent {
     const pair = this.getPair(pairId);
@@ -140,6 +152,28 @@ export class ReviewEngine {
       result: ReviewResult.PASS,
       elapsedMs,
       userAnswer,
+      reason: null,
+      now,
+    });
+  }
+
+  /**
+   * "Something else": recalled an answer that isn't one of the usual ones.
+   * Between a pass and a fail, so the level stays the same and the pair waits
+   * that level's interval again. Add the answer to the deck first.
+   */
+  recordOther(pairId: string, elapsedMs: number, userAnswer: string, now: number): ReviewEvent {
+    const pair = this.getPair(pairId);
+    if (this.isUnanswered(pairId)) throw new Error(`Pair ${pairId} has no answers to differ from`);
+    const answer = cleanAnswer(userAnswer);
+    if (!answer) throw new Error("Answer can't be blank");
+    pair.responseCount += 1;
+    pair.otherCount += 1;
+    recordAnswer(pair, answer);
+    return this.moveToStage(pair, pair.stage, {
+      result: ReviewResult.OTHER,
+      elapsedMs,
+      userAnswer: answer,
       reason: null,
       now,
     });
@@ -167,12 +201,12 @@ export class ReviewEngine {
   }
 
   /** A timeout schedules like a fail but doesn't count as a response. */
-  recordTimeout(pairId: string, now: number): ReviewEvent {
+  recordTimeout(pairId: string, now: number, elapsedMs: number = this.timeoutFor(pairId)): ReviewEvent {
     const pair = this.getPair(pairId);
     pair.timeoutCount += 1;
     return this.moveToStage(pair, this.stageAfterMiss(pair), {
       result: ReviewResult.TIMEOUT,
-      elapsedMs: this.config.timeoutMs,
+      elapsedMs,
       userAnswer: null,
       reason: "timeout",
       now,
@@ -181,15 +215,17 @@ export class ReviewEngine {
 
   static getSessionStats(events: readonly ReviewEvent[]): SessionStats {
     const total = events.length;
-    const passed = events.filter((e) => e.result === ReviewResult.PASS).length;
-    const failed = events.filter((e) => e.result === ReviewResult.FAIL).length;
-    const timedOut = events.filter((e) => e.result === ReviewResult.TIMEOUT).length;
+    const count = (result: ReviewResult) => events.filter((e) => e.result === result).length;
+    const passed = count(ReviewResult.PASS);
+    const failed = count(ReviewResult.FAIL);
+    const other = count(ReviewResult.OTHER);
     return {
       total,
       passed,
       failed,
-      timedOut,
-      responses: passed + failed,
+      other,
+      timedOut: count(ReviewResult.TIMEOUT),
+      responses: passed + failed + other,
       passRate: total ? passed / total : 0,
     };
   }
@@ -212,6 +248,7 @@ export class ReviewEngine {
     e: { result: ReviewResult; elapsedMs: number; userAnswer: string | null; reason: string | null; now: number },
   ): ReviewEvent {
     const stageBefore = pair.stage;
+    const timeoutMs = this.timeoutFor(pair.pairId);
     pair.stage = stage;
     pair.nextDueAt = nextDueAt(stage, e.now, this.config.srs);
     pair.updatedAt = e.now;
@@ -227,7 +264,7 @@ export class ReviewEngine {
       stageBefore,
       stageAfter: stage,
       elapsedMs: e.elapsedMs,
-      timeoutMs: this.config.timeoutMs,
+      timeoutMs,
       reviewedAt: e.now,
       userAnswer: e.userAnswer,
       reason: e.reason,

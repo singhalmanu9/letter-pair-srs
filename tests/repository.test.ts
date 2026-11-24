@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { CorruptDataError, KEYS, NewerSchemaError, Repository, SCHEMA_VERSION } from "../src/lib/repository";
+import {
+  CorruptDataError,
+  DEFAULT_SETTINGS,
+  KEYS,
+  NewerSchemaError,
+  Repository,
+  SCHEMA_VERSION,
+  configFromSettings,
+} from "../src/lib/repository";
 import { ReviewResult, type ReviewEvent } from "../src/lib/schemas";
 import { MemoryStore } from "../src/lib/storage";
 import { makeDeck, makePair } from "./helpers";
@@ -106,6 +114,23 @@ describe("Repository", () => {
     await store.set(KEYS.progress("a"), bad);
     await expect(repo.getProgress("a")).rejects.toBeInstanceOf(CorruptDataError);
     expect(await store.get(KEYS.progress("a"))).toBe(bad);
+  });
+
+  it("settings default when missing, round-trip, and fill in bad or missing fields", async () => {
+    expect(await repo.getSettings()).toEqual(DEFAULT_SETTINGS);
+
+    const custom = { ...DEFAULT_SETTINGS, sessionLimit: 20, timer: { ...DEFAULT_SETTINGS.timer, mode: "dynamic" as const } };
+    await repo.saveSettings(custom);
+    expect(await repo.getSettings()).toEqual(custom);
+
+    await store.set(KEYS.settings, JSON.stringify({ sessionLimit: -3, timer: { staticMs: 5 } }));
+    expect(await repo.getSettings()).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it("builds runtime config from settings", () => {
+    const config = configFromSettings({ ...DEFAULT_SETTINGS, sessionLimit: 15 });
+    expect(config.sessionLimit).toBe(15);
+    expect(config.srs.stages).toHaveLength(8);
   });
 
   it("resetAll removes only this app's keys", async () => {

@@ -64,6 +64,11 @@ describe("parsing", () => {
     expect(totalResponses(restored)).toBe(10);
   });
 
+  it("pair state from before otherCount existed loads with 0", () => {
+    const { otherCount: _omit, ...legacy } = makePair("q1", { responseCount: 1, passCount: 1 });
+    expect(parsePairState(roundtrip(legacy)).otherCount).toBe(0);
+  });
+
   it("burned pairs store a null due time", () => {
     expect(parsePairState(roundtrip(makePair("q1", { stage: 9, nextDueAt: null }))).nextDueAt).toBeNull();
   });

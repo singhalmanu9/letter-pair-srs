@@ -12,6 +12,7 @@ export function newPairState(pairId: string, now: number): PairState {
     responseCount: 0,
     passCount: 0,
     failCount: 0,
+    otherCount: 0,
     timeoutCount: 0,
     answerHistory: {},
     updatedAt: now,

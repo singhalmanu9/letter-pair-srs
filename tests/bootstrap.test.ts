@@ -78,8 +78,8 @@ describe("bootstrap", () => {
     await app.writes.idle();
 
     const reloaded = await ready(900_000);
-    expect(reloaded.session.activeReview).toMatchObject({ pairId: item.id, revealed: true });
-    expect(reloaded.session.timeRemaining(900_000)).toBe(config.timeoutMs);
+    expect(reloaded.session.activeReview).toMatchObject({ pairId: item.id, revealedAt: 900_000 });
+    expect(reloaded.session.timeRemaining(900_000)).toBe(config.timer.staticMs);
   });
 
   it("syncs progress when pairs are added to or removed from the deck", async () => {

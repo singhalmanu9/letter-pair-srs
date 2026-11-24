@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { ReviewEngine } from "../src/lib/engine";
 import { ReviewResult, type ActiveReviewSnapshot, type PairState, type ReviewEvent } from "../src/lib/schemas";
 import { SessionController } from "../src/lib/session";
-import { config, HOUR, makeDeck, makePair } from "./helpers";
+import { config, DAY, HOUR, makeDeck, makePair } from "./helpers";
 
-const T = config.timeoutMs;
+const T = config.timer.staticMs;
 
 describe("SessionController", () => {
   let pairs: PairState[];
@@ -59,7 +59,8 @@ describe("SessionController", () => {
     expect(session.revealAnswers(13)).toEqual(["apple", "apricot"]);
 
     const event = session.gradePass("apple", 3012);
-    expect(event).toMatchObject({ result: ReviewResult.PASS, userAnswer: "apple", elapsedMs: 3000, timeoutMs: T });
+    // Elapsed is recall time: start (12) to reveal (13), not to the tap.
+    expect(event).toMatchObject({ result: ReviewResult.PASS, userAnswer: "apple", elapsedMs: 1, timeoutMs: T });
     expect(session.activeReview).toBeNull();
     expect(session.reviewedEvents).toHaveLength(1);
     expect(events).toHaveLength(1);
@@ -94,11 +95,32 @@ describe("SessionController", () => {
     expect(() => session.revealAnswers(timeoutAt + 5)).toThrow();
   });
 
-  it("grading after the deadline records a timeout instead", () => {
+  it("the timer stops at reveal: no timeout afterwards and remaining time is frozen", () => {
     session.startNextReview(12);
-    session.revealAnswers(13);
-    expect(() => session.gradePass("apple", 12 + T)).toThrow(/timed out/);
-    expect(events.at(-1)?.result).toBe(ReviewResult.TIMEOUT);
+    session.revealAnswers(1012);
+    expect(session.timeRemaining(99_999)).toBe(T - 1000);
+    expect(session.checkTimeout(12 + T * 5)).toBeNull();
+    expect(session.gradePass("apple", 12 + T * 5).result).toBe(ReviewResult.PASS);
+  });
+
+  it("restartTimer gives a fresh countdown before reveal only", () => {
+    session.startNextReview(12);
+    session.restartTimer(5000);
+    expect(session.timeRemaining(5000)).toBe(T);
+    expect(snapshots.at(-1)?.startedAt).toBe(5000);
+    session.revealAnswers(5001);
+    session.restartTimer(9000);
+    expect(session.timeRemaining(9000)).toBe(T - 1);
+  });
+
+  it("quitting drops the current pair without recording anything", () => {
+    session.startNextReview(12);
+    session.abandonActiveReview();
+    expect(session.activeReview).toBeNull();
+    expect(events).toEqual([]);
+    expect(progressSaves).toBe(0);
+    expect(clears).toBe(1);
+    expect(pair("q1")).toMatchObject({ stage: 0, nextDueAt: 10, timeoutCount: 0, failCount: 0 });
   });
 
   it("session stats match recorded events", () => {
@@ -158,20 +180,37 @@ describe("SessionController", () => {
       expect(s.startNextReview(T)?.id).toBe("u1");
     });
 
-    it("on an answered pair, a new answer is added after reveal and counts as a pass", () => {
+    it("something else on an answered pair saves the answer and keeps the level", () => {
+      pair("q1").stage = 3;
       session.startNextReview(12);
-      expect(() => session.submitNewAnswer("Ace", 13)).toThrow(/reveal/);
+      expect(() => session.submitOther("Ace", 13)).toThrow(/reveal/);
       session.revealAnswers(13);
-      session.submitNewAnswer("Ace", 14);
+      const event = session.submitOther(" Ace ", 14);
+
+      expect(event).toMatchObject({ result: ReviewResult.OTHER, userAnswer: "Ace", stageBefore: 3, stageAfter: 3 });
       expect(session.engine.getItem("q1")!.answers).toEqual(["apple", "apricot", "Ace"]);
-      expect(pair("q1")).toMatchObject({ stage: 1, passCount: 1 });
+      expect(pair("q1")).toMatchObject({ stage: 3, nextDueAt: 14 + DAY, otherCount: 1, responseCount: 1, passCount: 0 });
+      expect(pair("q1").answerHistory).toEqual({ Ace: 1 });
+      expect(session.getSessionStats()).toMatchObject({ total: 1, other: 1, passed: 0, responses: 1 });
     });
 
-    it("typing an existing answer just passes without duplicating it", () => {
+    it("something else on a New pair keeps it New and due now", () => {
       session.startNextReview(12);
       session.revealAnswers(13);
-      session.submitNewAnswer(" apple ", 14);
+      session.submitOther("Ace", 14);
+      expect(pair("q1")).toMatchObject({ stage: 0, nextDueAt: 14 });
+    });
+
+    it("typing an existing answer as something else counts as a pass", () => {
+      session.startNextReview(12);
+      session.revealAnswers(13);
+      expect(session.submitOther(" apple ", 14).result).toBe(ReviewResult.PASS);
       expect(session.engine.getItem("q1")!.answers).toEqual(["apple", "apricot"]);
+    });
+
+    it("each typed path is only for its kind of pair", () => {
+      session.startNextReview(12);
+      expect(() => session.submitNewAnswer("Ace", 13)).toThrow(/submitOther/);
     });
 
     it("times out instead if the deadline has passed", () => {
@@ -194,7 +233,7 @@ describe("SessionController", () => {
 
     it("resumes with a fresh timer and current answers", () => {
       expect(session.restoreActiveReview(snap(), 5000)).toBe(true);
-      expect(session.activeReview).toMatchObject({ pairId: "q2", term: "BD", answers: ["boat"], revealed: true });
+      expect(session.activeReview).toMatchObject({ pairId: "q2", term: "BD", answers: ["boat"], revealedAt: 5000 });
       expect(session.timeRemaining(5000)).toBe(T);
       expect(session.checkTimeout(5000 + T - 1)).toBeNull();
 

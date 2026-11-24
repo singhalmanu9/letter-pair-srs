@@ -20,11 +20,26 @@ export interface SrsConfig {
   heavyPenaltyFromStage: number;
 }
 
+export type TimerMode = "static" | "dynamic";
+
+/**
+ * Recall time per pair. Static: the same for every pair. Dynamic: starts at
+ * `dynamicStartMs` for New and Level 1 pairs and shrinks by `dynamicStepMs`
+ * per level above 1, never below `dynamicMinMs`.
+ */
+export interface TimerConfig {
+  mode: TimerMode;
+  staticMs: number;
+  dynamicStartMs: number;
+  dynamicStepMs: number;
+  dynamicMinMs: number;
+}
+
 export interface AppConfig {
-  /** Time allowed to recall a pair before it auto-fails. */
-  timeoutMs: number;
+  timer: TimerConfig;
   srs: SrsConfig;
-  shortcuts: { reveal: string; pass: string; fail: string; next: string };
+  /** Max pairs per review session, or null to review everything due. */
+  sessionLimit: number | null;
 }
 
 /** WaniKani's fixed schedule, as Levels 1-8 (Level 9 = burned). */
@@ -43,8 +58,23 @@ export const WANIKANI_SRS: SrsConfig = {
   heavyPenaltyFromStage: 5,
 };
 
-export const DEFAULT_CONFIG: AppConfig = {
-  timeoutMs: 30_000,
-  srs: WANIKANI_SRS,
-  shortcuts: { reveal: "r", pass: "p", fail: "f", next: "n" },
+export const DEFAULT_TIMER: TimerConfig = {
+  mode: "static",
+  staticMs: 10_000,
+  dynamicStartMs: 10_000,
+  dynamicStepMs: 1_000,
+  dynamicMinMs: 2_000,
 };
+
+export const DEFAULT_CONFIG: AppConfig = {
+  timer: DEFAULT_TIMER,
+  srs: WANIKANI_SRS,
+  sessionLimit: null,
+};
+
+/** Recall time for a pair at `stage` under the given timer settings. */
+export function timeoutForStage(stage: number, timer: TimerConfig): number {
+  if (timer.mode === "static") return timer.staticMs;
+  const shrink = timer.dynamicStepMs * Math.max(0, stage - 1);
+  return Math.max(timer.dynamicMinMs, timer.dynamicStartMs - shrink);
+}

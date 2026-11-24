@@ -54,7 +54,7 @@ describe("ReviewEngine", () => {
       stageBefore: 2,
       stageAfter: 3,
       elapsedMs: 7250,
-      timeoutMs: config.timeoutMs,
+      timeoutMs: config.timer.staticMs,
       reviewedAt: 1000,
       userAnswer: "apple",
       reason: null,
@@ -105,7 +105,7 @@ describe("ReviewEngine", () => {
     });
     expect(event).toMatchObject({
       result: ReviewResult.TIMEOUT,
-      elapsedMs: config.timeoutMs,
+      elapsedMs: config.timer.staticMs,
       userAnswer: null,
       reason: "timeout",
     });
@@ -167,6 +167,27 @@ describe("ReviewEngine", () => {
     engine.recordFail("q1", 0, "   ", 0);
     engine.recordFail("q1", 0, "  apple ", 0);
     expect(pair.answerHistory).toEqual({ apple: 1 });
+  });
+
+  it("dynamic timer shrinks recall time per level down to a minimum", () => {
+    const timer = { mode: "dynamic" as const, staticMs: 10_000, dynamicStartMs: 10_000, dynamicStepMs: 1_000, dynamicMinMs: 4_000 };
+    const pairs = [0, 1, 2, 5, 8].map((stage, i) => makePair(`p${i}`, { stage }));
+    const engine = new ReviewEngine(makeDeck(pairs.map((p) => [p.pairId, p.pairId])), pairs, { ...config, timer });
+    expect(pairs.map((p) => engine.timeoutFor(p.pairId))).toEqual([10_000, 10_000, 9_000, 6_000, 4_000]);
+  });
+
+  it("static timer gives every pair the same recall time", () => {
+    const pairs = [makePair("a", { stage: 1 }), makePair("b", { stage: 8 })];
+    const engine = engineFor(pairs);
+    expect(engine.timeoutFor("a")).toBe(config.timer.staticMs);
+    expect(engine.timeoutFor("b")).toBe(config.timer.staticMs);
+  });
+
+  it("events record the recall time the pair was given", () => {
+    const timer = { ...config.timer, mode: "dynamic" as const };
+    const pair = makePair("q1", { stage: 4 });
+    const engine = new ReviewEngine(makeDeck([["q1", "AC"]]), [pair], { ...config, timer });
+    expect(engine.recordPass("q1", 1, null, 0).timeoutMs).toBe(timer.dynamicStartMs - 3 * timer.dynamicStepMs);
   });
 
   it("session stats", () => {

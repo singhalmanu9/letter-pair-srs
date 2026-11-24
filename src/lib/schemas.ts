@@ -6,6 +6,8 @@
 export const ReviewResult = {
   PASS: "pass",
   FAIL: "fail",
+  /** "Something else": recalled an answer other than the usual ones. */
+  OTHER: "other",
   TIMEOUT: "timeout",
 } as const;
 export type ReviewResult = (typeof ReviewResult)[keyof typeof ReviewResult];
@@ -40,10 +42,12 @@ export interface PairState {
   stage: number;
   /** When the pair is next due, or null once burned. */
   nextDueAt: number | null;
-  /** Non-timeout responses (pass + fail). */
+  /** Non-timeout responses (pass + fail + other). */
   responseCount: number;
   passCount: number;
   failCount: number;
+  /** "Something else" responses. */
+  otherCount: number;
   timeoutCount: number;
   /** How often the user gave each answer. */
   answerHistory: Record<string, number>;
@@ -159,6 +163,7 @@ export function parsePairState(value: unknown, path = "pair"): PairState {
     responseCount: count(o.responseCount, `${path}.responseCount`),
     passCount: count(o.passCount, `${path}.passCount`),
     failCount: count(o.failCount, `${path}.failCount`),
+    otherCount: count(o.otherCount ?? 0, `${path}.otherCount`),
     timeoutCount: count(o.timeoutCount, `${path}.timeoutCount`),
     answerHistory,
     updatedAt: number(o.updatedAt, `${path}.updatedAt`),
@@ -230,9 +235,9 @@ export function validateDeck(deck: Deck): true {
 
 /** Throws if the pair's counters are inconsistent. */
 export function validatePairConsistency(pair: PairState): true {
-  if (pair.responseCount !== pair.passCount + pair.failCount) {
+  if (pair.responseCount !== pair.passCount + pair.failCount + pair.otherCount) {
     throw new ValidationError(
-      `Consistency error for pair ${pair.pairId}: responseCount must equal passCount + failCount`,
+      `Consistency error for pair ${pair.pairId}: responseCount must equal passCount + failCount + otherCount`,
     );
   }
   return true;
