@@ -26,7 +26,8 @@ import {
 import type { AsyncKeyValueStore } from "./storage";
 
 export const SCHEMA_VERSION = 1;
-const PREFIX = "lpsrs:";
+export const STORAGE_PREFIX = "lpsrs:";
+const PREFIX = STORAGE_PREFIX;
 
 export const KEYS = {
   meta: `${PREFIX}meta`,
@@ -160,6 +161,11 @@ export class Repository {
   async appendEvent(deckId: string, event: ReviewEvent): Promise<void> {
     const history = await this.getHistory(deckId);
     history.push(event);
+    await this.write(KEYS.history(deckId), history);
+  }
+
+  /** Overwrite a deck's whole history (used when restoring a backup). */
+  async replaceHistory(deckId: string, history: readonly ReviewEvent[]): Promise<void> {
     await this.write(KEYS.history(deckId), history);
   }
 
