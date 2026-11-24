@@ -40,7 +40,7 @@ export function App() {
     content = (
       <div class="shell">
         <nav class="tabs" aria-label="Main">
-          <span class="brand">Letter Pairs SRS</span>
+          <span class="brand">BLD Letter Pairs SRS</span>
           {TABS.map((t) => (
             <button key={t.id} class={`tab ${tab === t.id ? "on" : ""}`} aria-current={tab === t.id} onClick={() => setTab(t.id)}>
               <Icon name={t.icon} size={22} />
@@ -74,7 +74,7 @@ export function App() {
 function Onboarding() {
   return (
     <div class="page onboarding">
-      <h1>Letter Pairs SRS</h1>
+      <h1>BLD Letter Pairs SRS</h1>
       <p class="muted">Drill your letter pair images with spaced repetition. Pick a starting deck. You can edit everything later.</p>
       <div class="template-list">
         {TEMPLATES.map((t) => (

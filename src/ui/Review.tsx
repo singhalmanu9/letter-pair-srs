@@ -186,7 +186,7 @@ export function Review({ onExit }: { onExit: () => void }) {
   const history = pair?.answerHistory ?? {};
 
   return (
-    <div class="review">
+    <div class={`review ${phase === "recall" ? "" : "review-answering"}`}>
       <header class="review-top">
         <button class="icon-btn" onClick={quit} aria-label="End session">
           <Icon name="x" />
@@ -242,15 +242,17 @@ export function Review({ onExit }: { onExit: () => void }) {
         {phase === "revealed" && active && (
           <>
             <p class="hint">Which one did you think of?</p>
-            {sortedAnswers().map((answer, i) => (
-              <button key={answer} class="btn answer" onClick={() => run(() => session.gradePass(answer, Date.now()))}>
-                <span>{answer}</span>
-                <span class="answer-meta">
-                  {history[answer] ? `used ${history[answer]}×` : ""}
-                  {i < 9 && <kbd>{i + 1}</kbd>}
-                </span>
-              </button>
-            ))}
+            <div class="answer-list">
+              {sortedAnswers().map((answer, i) => (
+                <button key={answer} class="btn answer" onClick={() => run(() => session.gradePass(answer, Date.now()))}>
+                  <span>{answer}</span>
+                  <span class="answer-meta">
+                    {history[answer] ? `used ${history[answer]}×` : ""}
+                    {i < 9 && <kbd>{i + 1}</kbd>}
+                  </span>
+                </button>
+              ))}
+            </div>
             <div class="row-2">
               <button class="btn btn-danger-text" onClick={() => run(() => session.gradeFail(null, Date.now()))}>
                 Didn't get it <kbd>F</kbd>

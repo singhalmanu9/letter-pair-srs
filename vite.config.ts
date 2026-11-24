@@ -12,9 +12,9 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["icon.svg", "apple-touch-icon.png"],
       manifest: {
-        // Placeholder name and icons; to be replaced with the final ones.
-        name: "Letter Pairs SRS",
-        short_name: "Letter Pairs",
+        // Placeholder icons; to be replaced with the final ones.
+        name: "BLD Letter Pairs SRS",
+        short_name: "BLD Pairs",
         description: "Spaced repetition for blindfolded cubing letter pairs.",
         theme_color: "#111827",
         background_color: "#111827",

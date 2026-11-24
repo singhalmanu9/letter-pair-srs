@@ -386,7 +386,7 @@ select {
 .review {
   display: flex;
   flex-direction: column;
-  min-height: 100dvh;
+  height: 100dvh;
   max-width: 480px;
   margin: 0 auto;
   padding: env(safe-area-inset-top) 16px calc(16px + env(safe-area-inset-bottom));
@@ -438,6 +438,33 @@ select {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* Once answering, the term shrinks and a long answer list scrolls on its own,
+   keeping "Didn't get it" / "Something else" on screen. */
+.review-answering .review-term {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: 20px 0;
+}
+
+.review-answering .review-actions {
+  flex: 1;
+  min-height: 0;
+  justify-content: flex-end;
+}
+
+.answer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.review .row-2 {
+  flex-shrink: 0;
 }
 
 .hint {

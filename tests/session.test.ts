@@ -68,11 +68,25 @@ describe("SessionController", () => {
     expect(pair("q1")).toMatchObject({ stage: 1, nextDueAt: 3012 + 4 * HOUR, passCount: 1 });
   });
 
-  it("fail updates the pair", () => {
+  it("failing a New pair keeps it New and due now", () => {
     session.startNextReview(12);
     session.revealAnswers(13);
     session.gradeFail("wrong", 16);
-    expect(pair("q1")).toMatchObject({ stage: 1, failCount: 1, responseCount: 1, answerHistory: { wrong: 1 } });
+    expect(pair("q1")).toMatchObject({ stage: 0, nextDueAt: 16, failCount: 1, responseCount: 1, answerHistory: { wrong: 1 } });
+  });
+
+  it("timing out on a New pair keeps it New and due now", () => {
+    session.startNextReview(12);
+    session.checkTimeout(12 + T);
+    expect(pair("q1")).toMatchObject({ stage: 0, nextDueAt: 12 + T, timeoutCount: 1 });
+  });
+
+  it("failing a learned pair still drops a level", () => {
+    pair("q1").stage = 3;
+    session.startNextReview(12);
+    session.revealAnswers(13);
+    session.gradeFail(null, 16);
+    expect(pair("q1")).toMatchObject({ stage: 2, nextDueAt: 16 + 8 * HOUR });
   });
 
   it("grading without reveal throws", () => {

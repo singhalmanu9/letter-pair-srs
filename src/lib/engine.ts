@@ -237,9 +237,13 @@ export class ReviewEngine {
     return pair;
   }
 
-  /** Fail/timeout: drop per the SRS rules, except unanswered pairs stay New and due now. */
+  /**
+   * Fail/timeout: drop per the SRS rules, except New pairs (and pairs with no
+   * answers) stay New and due now, so they come back later in the session.
+   */
   private stageAfterMiss(pair: PairState): number {
-    return this.isUnanswered(pair.pairId) ? NEW_STAGE : stageAfterFail(pair.stage, this.config.srs);
+    if (pair.stage === NEW_STAGE || this.isUnanswered(pair.pairId)) return NEW_STAGE;
+    return stageAfterFail(pair.stage, this.config.srs);
   }
 
   private moveToStage(
