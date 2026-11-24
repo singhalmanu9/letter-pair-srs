@@ -1,2 +1,4 @@
 .DS_Store
 lp-venv/
+node_modules/
+dist/

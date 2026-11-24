@@ -1,49 +1,35 @@
-# Letter Pair SRS – Local Desktop App
+# Letter Pair SRS
 
-A lightweight spaced repetition system for memorizing letter pairs. Self-grade reveals, auto-fail on timeout, and local JSON persistence. Designed for blindfolded speedcubing.
+A lightweight spaced repetition system for memorizing letter pairs, built for blindfolded speedcubing. Self-graded reveals, auto-fail on timeout, and everything stored locally in your browser.
 
-## Quick Start
+Being ported from a Python desktop app to a static web app hosted on GitHub Pages.
+
+## Development
+
+Requires Node 18+.
 
 ```bash
-source lp-venv/bin/activate
-python3 -m pip install -r requirements.txt
-python main.py
+npm install
+npm run dev        # local dev server
+npm test           # run the test suite
+npm run build      # type-check and build to dist/
 ```
 
-## Project Structure
+## Project structure
 
-- `config.py` – Configuration defaults (timeout, intervals, etc.)
-- `schemas.py` – Data structures (DeckItem, PairState, ReviewEvent, etc.)
-- `persistence.py` – JSON load/save for deck, pair state, and review history
-- `engine.py` – Review engine (due selection, scheduling)
-- `timer.py` – Session timer and timeout management
-- `ui.py` – PySide6 UI views
-- `main.py` – App entry point
-- `tests/` – Unit tests
-- `data/` – Letter pair deck, scheduling state, and review history files
+- `src/lib/config.ts`: SRS settings and defaults (timeout, intervals, shortcuts)
+- `src/lib/schemas.ts`: data types (deck items, pair state, review events) and validation
+- `src/lib/engine.ts`: picking the next due pair and scheduling
+- `src/lib/session.ts`: review flow: start, reveal, grade, timeout, recovery
+- `src/lib/timer.ts`: per-review countdown
+- `src/lib/persistence.ts`: storage via a key-value interface (`localStorage` in the browser)
+- `src/data/deck.json`: sample deck
+- `src/main.ts`: app entry point
+- `tests/`: Vitest unit tests
 
-## Architecture
+## How a review works
 
-1. **Review Engine** (engine.py) – Pair scheduling logic
-2. **Persistence** (persistence.py) – JSON storage and recovery
-3. **Timer/Session** (timer.py) – Countdown and timeout handling
-4. **UI** (ui.py) – PySide6 display layer (thin wrapper over engine)
-
-## Workflow
-
-1. App loads deck and pair state from JSON
-2. Selects earliest-due pair
-3. Shows letter pair, starts timer
-4. On timeout: auto-fail, reveal memorized answers, record event
-5. On manual reveal: user self-grades pass/fail based on their answer, record event
-6. Track frequency of given answers for visualization
-7. Persist state and history after each review
-8. Show session summary
-
-## Features
-
-- **Answer Tracking**: Tracks frequency of each answer you provide
-- **Dynamic Deck Updates**: Add new acceptable answers as you discover them
-- **Spaced Repetition**: Simple pass/fail scheduling with configurable intervals
-- **Auto-Timeout**: Automatically fails cards if you don't respond in time
-- **Local Storage**: Everything stays on your computer; no cloud or sync
+1. The earliest-due pair is shown and the countdown starts.
+2. On reveal, you self-grade pass or fail. On timeout, it auto-fails.
+3. Pass multiplies the pair's interval; fail or timeout resets it.
+4. State and history are saved after every review.
