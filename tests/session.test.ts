@@ -121,6 +121,68 @@ describe("SessionController", () => {
     expect(clears).toBe(1);
   });
 
+  describe("new answers", () => {
+    it("an unanswered pair passes by typing an answer, no reveal needed", () => {
+      const deck = makeDeck([["u1", "AB", []]]);
+      const unanswered = [makePair("u1")];
+      const decksSaved: unknown[] = [];
+      const s = new SessionController(new ReviewEngine(deck, unanswered, config), {
+        saveDeck: (d) => decksSaved.push(d),
+      });
+
+      s.startNextReview(0);
+      expect(s.activeReview?.answers).toEqual([]);
+      expect(() => s.gradePass(null, 1)).toThrow(/reveal/);
+
+      const event = s.submitNewAnswer("  Abbey Road ", 5000);
+      expect(event).toMatchObject({ result: ReviewResult.PASS, userAnswer: "Abbey Road", stageAfter: 1, elapsedMs: 5000 });
+      expect(deck.items[0]!.answers).toEqual(["Abbey Road"]);
+      expect(decksSaved).toHaveLength(1);
+      expect(unanswered[0]).toMatchObject({ stage: 1, answerHistory: { "Abbey Road": 1 } });
+    });
+
+    it("rejects a blank answer", () => {
+      const deck = makeDeck([["u1", "AB", []]]);
+      const s = new SessionController(new ReviewEngine(deck, [makePair("u1")], config));
+      s.startNextReview(0);
+      expect(() => s.submitNewAnswer("   ", 1)).toThrow(/blank/);
+      expect(deck.items[0]!.answers).toEqual([]);
+      expect(s.activeReview).not.toBeNull();
+    });
+
+    it("failing or timing out an unanswered pair brings it straight back", () => {
+      const deck = makeDeck([["u1", "AB", []]]);
+      const s = new SessionController(new ReviewEngine(deck, [makePair("u1")], config));
+      s.startNextReview(0);
+      s.checkTimeout(T);
+      expect(s.startNextReview(T)?.id).toBe("u1");
+    });
+
+    it("on an answered pair, a new answer is added after reveal and counts as a pass", () => {
+      session.startNextReview(12);
+      expect(() => session.submitNewAnswer("Ace", 13)).toThrow(/reveal/);
+      session.revealAnswers(13);
+      session.submitNewAnswer("Ace", 14);
+      expect(session.engine.getItem("q1")!.answers).toEqual(["apple", "apricot", "Ace"]);
+      expect(pair("q1")).toMatchObject({ stage: 1, passCount: 1 });
+    });
+
+    it("typing an existing answer just passes without duplicating it", () => {
+      session.startNextReview(12);
+      session.revealAnswers(13);
+      session.submitNewAnswer(" apple ", 14);
+      expect(session.engine.getItem("q1")!.answers).toEqual(["apple", "apricot"]);
+    });
+
+    it("times out instead if the deadline has passed", () => {
+      const deck = makeDeck([["u1", "AB", []]]);
+      const s = new SessionController(new ReviewEngine(deck, [makePair("u1")], config));
+      s.startNextReview(0);
+      expect(() => s.submitNewAnswer("Abbey", T)).toThrow(/timed out/);
+      expect(deck.items[0]!.answers).toEqual([]);
+    });
+  });
+
   describe("restore", () => {
     const snap = (overrides: Partial<ActiveReviewSnapshot> = {}): ActiveReviewSnapshot => ({
       deckId: "deck1",
@@ -140,9 +202,10 @@ describe("SessionController", () => {
       expect(pair("q2").failCount).toBe(1);
     });
 
-    it("ignores a snapshot whose pair has lost all its answers", () => {
+    it("restores a review of a pair with no answers", () => {
       session.engine.deck.items.find((i) => i.id === "q2")!.answers.length = 0;
-      expect(session.restoreActiveReview(snap(), 0)).toBe(false);
+      expect(session.restoreActiveReview(snap(), 0)).toBe(true);
+      expect(session.activeReview?.answers).toEqual([]);
     });
 
     it("ignores snapshots for another deck, a missing pair, or a burned pair", () => {

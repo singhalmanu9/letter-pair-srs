@@ -13,6 +13,7 @@ import {
   recordAnswer,
   removeAnswerFromPair,
   totalResponses,
+  validateDeck,
   validatePairConsistency,
   type ReviewEvent,
 } from "../src/lib/schemas";
@@ -29,6 +30,11 @@ describe("parsing", () => {
 
   it("an empty deck is valid", () => {
     expect(parseDeck(roundtrip(makeDeck([]))).items).toEqual([]);
+  });
+
+  it("validateDeck rejects blank terms and answers", () => {
+    expect(() => validateDeck(makeDeck([["q1", "  ", ["x"]]]))).toThrow(/Blank term/);
+    expect(() => validateDeck(makeDeck([["q1", "AC", ["ok", " "]]]))).toThrow(/Blank answer/);
   });
 
   it("allows pairs with no answers yet", () => {

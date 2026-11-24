@@ -1,13 +1,21 @@
 /** Session orchestration: review flow, timeout handling and persistence hooks. */
 
 import { ReviewEngine, type SessionStats } from "./engine";
-import type { ActiveReviewSnapshot, DeckItem, PairState, ReviewEvent } from "./schemas";
+import {
+  addAnswerToPair,
+  type ActiveReviewSnapshot,
+  type Deck,
+  type DeckItem,
+  type PairState,
+  type ReviewEvent,
+} from "./schemas";
 import { ReviewTimer } from "./timer";
 
 /** In-flight state for the pair currently shown. */
 export interface ActiveReview {
   pairId: string;
   term: string;
+  /** Accepted answers. Empty means the user must come up with one. */
   answers: string[];
   timer: ReviewTimer;
   revealed: boolean;
@@ -18,6 +26,7 @@ export interface ActiveReview {
  * the caller is responsible for ordering and error handling (see WriteQueue).
  */
 export interface SessionCallbacks {
+  saveDeck?: (deck: Deck) => void;
   saveProgress?: (pairs: readonly PairState[]) => void;
   appendEvent?: (event: ReviewEvent) => void;
   saveActiveReview?: (snapshot: ActiveReviewSnapshot) => void;
@@ -108,6 +117,28 @@ export class SessionController {
   gradeFail(userAnswer: string | null, now: number): ReviewEvent {
     const active = this.ensureReadyForGrading(now);
     const event = this.engine.recordFail(active.pairId, active.timer.elapsed(now), userAnswer, now);
+    this.finalizeEvent(event);
+    return event;
+  }
+
+  /**
+   * The user came up with an answer that isn't one of the accepted ones: save
+   * it as a new accepted answer and grade the review a pass. For a pair with
+   * no answers this is the only way to pass, and needs no reveal; otherwise
+   * the answers must have been revealed first. Throws on a blank answer.
+   */
+  submitNewAnswer(answer: string, now: number): ReviewEvent {
+    const active = this.ensureActive();
+    const trimmed = answer.trim();
+    if (trimmed === "") throw new Error("Answer can't be blank");
+    if (active.answers.length > 0 && !active.revealed) throw new Error("Must reveal answers before grading");
+    this.enforceNotTimedOut(now);
+
+    const deck = this.engine.deck;
+    if (addAnswerToPair(deck, active.pairId, trimmed, now)) this.callbacks.saveDeck?.(deck);
+    active.answers = [...(this.engine.getItem(active.pairId)?.answers ?? [trimmed])];
+
+    const event = this.engine.recordPass(active.pairId, active.timer.elapsed(now), trimmed, now);
     this.finalizeEvent(event);
     return event;
   }

@@ -63,12 +63,13 @@ export async function loadApp(repo: Repository, config: AppConfig, opts: LoadOpt
     if (meta.activeDeckId !== deckId) await repo.setActiveDeck(deckId);
 
     const stored = await repo.getProgress(deckId);
-    const { pairs, added, removed } = syncProgress(deck, stored ?? [], opts.now);
-    if (stored === null || added.length > 0 || removed.length > 0) await repo.saveProgress(deckId, pairs);
+    const { pairs, added, removed, reset } = syncProgress(deck, stored ?? [], opts.now);
+    if (stored === null || added.length || removed.length || reset.length) await repo.saveProgress(deckId, pairs);
 
     const engine = new ReviewEngine(deck, pairs, config);
     const writes = new WriteQueue(opts.onPersistError);
     const session = new SessionController(engine, {
+      saveDeck: (d) => writes.enqueue(() => repo.saveDeck(d)),
       saveProgress: (p) => writes.enqueue(() => repo.saveProgress(deckId, p)),
       appendEvent: (e) => writes.enqueue(() => repo.appendEvent(deckId, e)),
       saveActiveReview: (s) => writes.enqueue(() => repo.saveActiveReview(s)),

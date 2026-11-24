@@ -12,7 +12,14 @@ import {
   type PairState,
   type ReviewEvent,
 } from "./schemas";
-import { burnedStage, nextDueAt, stageAfterFail, stageAfterPass } from "./srs";
+import { resetIfUnanswered } from "./progress";
+import { burnedStage, NEW_STAGE, nextDueAt, stageAfterFail, stageAfterPass } from "./srs";
+
+/** Trim a typed answer; blank becomes null. */
+function cleanAnswer(answer: string | null): string | null {
+  const trimmed = answer?.trim() ?? "";
+  return trimmed === "" ? null : trimmed;
+}
 
 export interface SessionStats {
   total: number;
@@ -50,10 +57,28 @@ export class ReviewEngine {
     }
   }
 
-  /** Not burned and has at least one answer. */
+  /** Anything not burned can be reviewed, including pairs with no answers yet. */
   isReviewable(pair: PairState): boolean {
-    const item = this.itemById.get(pair.pairId);
-    return pair.nextDueAt !== null && item !== undefined && hasAnswers(item);
+    return pair.nextDueAt !== null;
+  }
+
+  /** Whether the pair has no accepted answers yet (the user must come up with one). */
+  isUnanswered(pairId: string): boolean {
+    const item = this.itemById.get(pairId);
+    return item !== undefined && !hasAnswers(item);
+  }
+
+  /**
+   * Call after a pair's answers change. A pair left with no answers goes back
+   * to New and becomes due now. Returns whether the pair's state changed.
+   */
+  syncPair(pairId: string, now: number): boolean {
+    const pair = this.pairById.get(pairId);
+    const item = this.itemById.get(pairId);
+    if (!pair || !item) return false;
+    const reset = resetIfUnanswered(pair, item, now);
+    if (reset) Object.assign(pair, reset);
+    return reset !== null;
   }
 
   /** Earliest-due pair state among currently due pairs. */
@@ -61,7 +86,7 @@ export class ReviewEngine {
     let earliest: PairState | null = null;
     for (const pair of this.pairs) {
       const due = pair.nextDueAt;
-      if (due === null || due > now || !this.isReviewable(pair)) continue;
+      if (due === null || due > now) continue;
       if (earliest === null || due < (earliest.nextDueAt as number)) earliest = pair;
     }
     return earliest;
@@ -78,36 +103,36 @@ export class ReviewEngine {
   }
 
   dueCount(now: number): number {
-    return this.pairs.filter((p) => this.isReviewable(p) && (p.nextDueAt as number) <= now).length;
+    return this.pairs.filter((p) => p.nextDueAt !== null && p.nextDueAt <= now).length;
   }
 
   /** Milliseconds until the next pair is due, or null if nothing is scheduled. */
   msUntilNextDue(now: number): number | null {
-    const times = this.pairs.filter((p) => this.isReviewable(p)).map((p) => p.nextDueAt as number);
+    const times = this.pairs.map((p) => p.nextDueAt).filter((t): t is number => t !== null);
     if (times.length === 0) return null;
     return Math.max(0, Math.min(...times) - now);
   }
 
-  /**
-   * Number of pairs at each stage, indexed by stage number (0 = new … last =
-   * burned). Pairs without answers are left out; see `unansweredCount`.
-   */
+  /** Number of pairs at each stage, indexed by stage number (0 = new … last = burned). */
   stageCounts(): number[] {
     const counts = new Array<number>(burnedStage(this.config.srs) + 1).fill(0);
-    for (const pair of this.pairs) {
-      const item = this.itemById.get(pair.pairId);
-      if (item && hasAnswers(item)) counts[pair.stage] = (counts[pair.stage] ?? 0) + 1;
-    }
+    for (const pair of this.pairs) counts[pair.stage] = (counts[pair.stage] ?? 0) + 1;
     return counts;
   }
 
-  /** Pairs in the deck that have no answers yet. */
+  /** Pairs in the deck that have no answers yet (always New). */
   unansweredCount(): number {
     return this.deck.items.filter((item) => !hasAnswers(item)).length;
   }
 
+  /**
+   * A pass requires the pair to have an accepted answer. For a pair with none,
+   * add the user's answer to the deck first (see SessionController.submitNewAnswer).
+   */
   recordPass(pairId: string, elapsedMs: number, userAnswer: string | null, now: number): ReviewEvent {
     const pair = this.getPair(pairId);
+    if (this.isUnanswered(pairId)) throw new Error(`Pair ${pairId} needs an answer before it can pass`);
+    userAnswer = cleanAnswer(userAnswer);
     pair.responseCount += 1;
     pair.passCount += 1;
     if (userAnswer) recordAnswer(pair, userAnswer);
@@ -128,10 +153,11 @@ export class ReviewEngine {
     reason: string | null = null,
   ): ReviewEvent {
     const pair = this.getPair(pairId);
+    userAnswer = cleanAnswer(userAnswer);
     pair.responseCount += 1;
     pair.failCount += 1;
     if (userAnswer) recordAnswer(pair, userAnswer);
-    return this.moveToStage(pair, stageAfterFail(pair.stage, this.config.srs), {
+    return this.moveToStage(pair, this.stageAfterMiss(pair), {
       result: ReviewResult.FAIL,
       elapsedMs,
       userAnswer,
@@ -144,7 +170,7 @@ export class ReviewEngine {
   recordTimeout(pairId: string, now: number): ReviewEvent {
     const pair = this.getPair(pairId);
     pair.timeoutCount += 1;
-    return this.moveToStage(pair, stageAfterFail(pair.stage, this.config.srs), {
+    return this.moveToStage(pair, this.stageAfterMiss(pair), {
       result: ReviewResult.TIMEOUT,
       elapsedMs: this.config.timeoutMs,
       userAnswer: null,
@@ -172,8 +198,12 @@ export class ReviewEngine {
     const pair = this.pairById.get(pairId);
     if (!pair) throw new Error(`Unknown pair: ${pairId}`);
     if (pair.nextDueAt === null) throw new Error(`Pair ${pairId} is burned and can't be reviewed`);
-    if (!this.isReviewable(pair)) throw new Error(`Pair ${pairId} has no answers and can't be reviewed`);
     return pair;
+  }
+
+  /** Fail/timeout: drop per the SRS rules, except unanswered pairs stay New and due now. */
+  private stageAfterMiss(pair: PairState): number {
+    return this.isUnanswered(pair.pairId) ? NEW_STAGE : stageAfterFail(pair.stage, this.config.srs);
   }
 
   private moveToStage(

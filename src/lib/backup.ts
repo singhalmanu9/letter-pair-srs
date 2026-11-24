@@ -149,7 +149,7 @@ function parseDeckList(o: Record<string, unknown>, fileName?: string): DeckTempl
     const r = raw as Record<string, unknown>;
     if (typeof r.term !== "string" || r.term.trim() === "") throw new ImportError(`${row} has no term.`);
     const term = r.term.trim();
-    // Answers are optional: pairs without any are kept but not reviewed yet.
+    // Answers are optional: pairs without any start as New with no answers.
     if (r.answers !== undefined && !Array.isArray(r.answers)) throw new ImportError(`${term}: answers must be a list.`);
     const given: unknown[] = Array.isArray(r.answers) ? r.answers : [];
     const answers = [...new Set(given.filter((a): a is string => typeof a === "string").map((a) => a.trim()))].filter(

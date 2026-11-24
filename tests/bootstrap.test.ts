@@ -97,6 +97,38 @@ describe("bootstrap", () => {
     expect((await repo.getProgress(deck.id))?.map((p) => p.pairId)).toEqual(ids);
   });
 
+  it("a pair whose answers were all removed comes back as New on load", async () => {
+    const repo = new Repository(store);
+    const deck = await createDeck(repo, sample, 1000);
+    const app = await ready();
+    const item = app.session.startNextReview(1000)!;
+    app.session.revealAnswers(1001);
+    app.session.gradePass(null, 1002);
+    await app.writes.idle();
+
+    deck.items.find((i) => i.id === item.id)!.answers = [];
+    await repo.saveDeck(deck);
+
+    const reloaded = await ready(5000);
+    expect(reloaded.engine.pairs.find((p) => p.pairId === item.id)).toMatchObject({ stage: 0, nextDueAt: 5000 });
+    expect((await repo.getProgress(deck.id))!.find((p) => p.pairId === item.id)!.stage).toBe(0);
+  });
+
+  it("an answer typed for an unanswered pair is saved to the deck", async () => {
+    const repo = new Repository(store);
+    const deck = await createDeck(repo, sample, 1000);
+    deck.items.push({ id: "blank", term: "ZZ", answers: [], updatedAt: 1000 });
+    await repo.saveDeck(deck);
+
+    const app = await ready(1000);
+    app.session.restoreActiveReview({ deckId: deck.id, pairId: "blank", startedAt: 1000, revealed: false }, 1000);
+    app.session.submitNewAnswer("Zigzag", 2000);
+    await app.writes.idle();
+
+    expect((await repo.getDeck(deck.id))!.items.find((i) => i.id === "blank")!.answers).toEqual(["Zigzag"]);
+    expect(errors).toEqual([]);
+  });
+
   it("discards a saved review whose pair was deleted", async () => {
     const repo = new Repository(store);
     const deck = await createDeck(repo, sample, 1000);

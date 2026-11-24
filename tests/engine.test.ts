@@ -116,26 +116,57 @@ describe("ReviewEngine", () => {
     expect(engine.stageCounts()).toEqual([2, 0, 0, 0, 0, 1, 0, 0, 0, 1]);
   });
 
-  it("skips pairs with no answers until they get one", () => {
+  it("reviews pairs with no answers like any other due pair", () => {
     const deck = makeDeck([["q1", "AB", []], ["q2", "AC", ["x"]]]);
-    const pairs = [makePair("q1", { nextDueAt: 0 }), makePair("q2", { nextDueAt: 50 })];
-    const engine = new ReviewEngine(deck, pairs, config);
+    const engine = new ReviewEngine(deck, [makePair("q1", { nextDueAt: 0 }), makePair("q2", { nextDueAt: 50 })], config);
 
-    expect(engine.getDuePair(100)?.id).toBe("q2");
-    expect(engine.dueCount(100)).toBe(1);
-    expect(engine.unansweredCount()).toBe(1);
-    expect(engine.stageCounts()[0]).toBe(1);
-    expect(() => engine.recordPass("q1", 0, null, 100)).toThrow(/no answers/);
-
-    deck.items[0]!.answers.push("Abbey");
     expect(engine.getDuePair(100)?.id).toBe("q1");
-    expect(engine.unansweredCount()).toBe(0);
+    expect(engine.dueCount(100)).toBe(2);
+    expect(engine.unansweredCount()).toBe(1);
+    expect(engine.isUnanswered("q1")).toBe(true);
+    expect(engine.stageCounts()[0]).toBe(2);
   });
 
-  it("ignores unanswered pairs when reporting the next due time", () => {
-    const deck = makeDeck([["q1", "AB", []], ["q2", "AC", ["x"]]]);
-    const engine = new ReviewEngine(deck, [makePair("q1", { nextDueAt: 10 }), makePair("q2", { nextDueAt: 500 })], config);
-    expect(engine.msUntilNextDue(0)).toBe(500);
+  it("an unanswered pair can't pass until it has an answer", () => {
+    const deck = makeDeck([["q1", "AB", []]]);
+    const engine = new ReviewEngine(deck, [makePair("q1")], config);
+    expect(() => engine.recordPass("q1", 0, "Abbey", 0)).toThrow(/needs an answer/);
+
+    deck.items[0]!.answers.push("Abbey");
+    engine.recordPass("q1", 0, "Abbey", 0);
+    expect(engine.pairs[0]).toMatchObject({ stage: 1, nextDueAt: 4 * HOUR });
+  });
+
+  it("failing or timing out an unanswered pair keeps it New and due now", () => {
+    const deck = makeDeck([["q1", "AB", []], ["q2", "AC", []]]);
+    const engine = new ReviewEngine(deck, [makePair("q1"), makePair("q2")], config);
+
+    const fail = engine.recordFail("q1", 0, null, 500);
+    engine.recordTimeout("q2", 600);
+
+    expect(engine.pairs[0]).toMatchObject({ stage: 0, nextDueAt: 500, failCount: 1 });
+    expect(engine.pairs[1]).toMatchObject({ stage: 0, nextDueAt: 600, timeoutCount: 1 });
+    expect(fail).toMatchObject({ stageBefore: 0, stageAfter: 0 });
+  });
+
+  it("syncPair sends a pair that lost all its answers back to New", () => {
+    const deck = makeDeck([["q1", "AB", ["Abbey"]]]);
+    const pair = makePair("q1", { stage: 7, nextDueAt: 99 * DAY, passCount: 6, responseCount: 6 });
+    const engine = new ReviewEngine(deck, [pair], config);
+
+    expect(engine.syncPair("q1", 1000)).toBe(false);
+    deck.items[0]!.answers.length = 0;
+    expect(engine.syncPair("q1", 1000)).toBe(true);
+    expect(pair).toMatchObject({ stage: 0, nextDueAt: 1000, passCount: 6 });
+    expect(engine.syncPair("q1", 2000)).toBe(false);
+  });
+
+  it("trims recorded answers and ignores blank ones", () => {
+    const pair = makePair("q1");
+    const engine = engineFor([pair]);
+    engine.recordFail("q1", 0, "   ", 0);
+    engine.recordFail("q1", 0, "  apple ", 0);
+    expect(pair.answerHistory).toEqual({ apple: 1 });
   });
 
   it("session stats", () => {

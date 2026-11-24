@@ -12,7 +12,8 @@ export type ReviewResult = (typeof ReviewResult)[keyof typeof ReviewResult];
 
 /**
  * One letter pair and the answers (images/words) the user accepts for it.
- * A pair with no answers yet stays in the deck but isn't reviewed.
+ * A pair with no answers yet is always New: reviewing it means coming up
+ * with an answer on the spot.
  */
 export interface DeckItem {
   id: string;
@@ -208,11 +209,16 @@ export function parseActiveReviewSnapshot(value: unknown, path = "activeReview")
 // ---------------------------------------------------------------------------
 // Validation
 
-/** Throws if the deck has duplicate ids or duplicate terms. An empty deck is valid. */
+/**
+ * Throws if the deck has blank terms or answers, duplicate ids or duplicate
+ * terms. An empty deck, and pairs with no answers, are valid.
+ */
 export function validateDeck(deck: Deck): true {
   const ids = new Set<string>();
   const terms = new Set<string>();
   for (const item of deck.items) {
+    if (item.term.trim() === "") throw new ValidationError(`Blank term in deck (item ${item.id})`);
+    if (item.answers.some((a) => a.trim() === "")) throw new ValidationError(`Blank answer for ${item.term}`);
     if (ids.has(item.id)) throw new ValidationError(`Duplicate item id in deck: ${item.id}`);
     const term = termKey(item.term);
     if (terms.has(term)) throw new ValidationError(`Duplicate term in deck: ${item.term}`);
@@ -255,8 +261,8 @@ export function addAnswerToPair(deck: Deck, pairId: string, answer: string, now:
 
 /**
  * Remove an accepted answer from a pair. Returns false if the pair or answer
- * doesn't exist. Removing the last answer takes the pair out of reviews
- * (its progress is kept).
+ * doesn't exist. Removing the last answer is allowed; the pair then goes back
+ * to New (call ReviewEngine.syncPair, or syncProgress on next load).
  */
 export function removeAnswerFromPair(deck: Deck, pairId: string, answer: string, now: number): boolean {
   const item = getItemById(deck, pairId);
@@ -269,7 +275,7 @@ export function removeAnswerFromPair(deck: Deck, pairId: string, answer: string,
   return true;
 }
 
-/** Whether a pair has any answers, i.e. can be reviewed. */
+/** Whether a pair has any accepted answers yet. */
 export function hasAnswers(item: DeckItem): boolean {
   return item.answers.length > 0;
 }
