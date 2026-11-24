@@ -5,11 +5,14 @@ import {
   BACKUP_FORMAT,
   BACKUP_VERSION,
   ImportError,
+  applyDeckUpdate,
   applyImport,
   backupFileName,
   createBackup,
   createRawDump,
+  deckUpdateHasChanges,
   parseImport,
+  planDeckUpdate,
   planImport,
 } from "../src/lib/backup";
 import { KEYS, Repository } from "../src/lib/repository";
@@ -220,5 +223,97 @@ describe("import: deck lists", () => {
 
     const dupes = parseImport(JSON.stringify({ items: [{ term: "AB", answers: ["x"] }, { term: "ab", answers: ["y"] }] }));
     await expect(planImport(repo, dupes, 0)).rejects.toThrow(/Duplicate term/);
+  });
+});
+
+describe("updating an existing deck from a deck list", () => {
+  const listOf = (items: [string, string[]][]) => ({
+    id: "import",
+    name: "file",
+    description: "",
+    items: items.map(([term, answers]) => ({ term, answers })),
+  });
+
+  /** Sample deck with one reviewed pair (AC at Apprentice 1). */
+  async function setup() {
+    const seeded = await seededRepo();
+    const deck = (await seeded.repo.getDeck(seeded.deckId))!;
+    const ac = deck.items.find((i) => i.term === "AC")!;
+    return { ...seeded, deck, ac };
+  }
+
+  const file = listOf([
+    ["ac", ["Andy Capp", "Ace"]], // matched case-insensitively; loses 2 answers, gains "Ace"
+    ["BD", ["Big Deal", "Bad Day", "Board"]], // unchanged
+    ["CZ", ["Czech", "Crazy Zone", "Citizen Z"]], // same answers, different order
+    ["ZZ", ["Zigzag"]], // new
+  ]);
+
+  it("plans additions, answer changes and missing pairs without writing", async () => {
+    const { repo, deck, deckId } = await setup();
+    const before = JSON.stringify(await repo.getDeck(deckId));
+
+    const plan = planDeckUpdate(deck, file);
+    expect(plan).toEqual({
+      deckId,
+      deckName: "Sample deck",
+      addedTerms: ["ZZ"],
+      missingTerms: ["DF", "EG"],
+      changed: [{ term: "AC", added: ["Ace"], removed: ["Andy Cappuccino", "Awesome Coffee"] }],
+      unchangedCount: 2,
+    });
+    expect(JSON.stringify(await repo.getDeck(deckId))).toBe(before);
+  });
+
+  it("applies the file's answers, adds new pairs, keeps missing pairs, and keeps progress", async () => {
+    const { repo, deckId, ac } = await setup();
+    const acProgressBefore = (await repo.getProgress(deckId))!.find((p) => p.pairId === ac.id)!;
+
+    const updated = await applyDeckUpdate(repo, deckId, file, { removeMissing: false }, 7000);
+
+    expect(updated.items.map((i) => i.term)).toEqual(["AC", "BD", "CZ", "DF", "EG", "ZZ"]);
+    const newAc = updated.items.find((i) => i.term === "AC")!;
+    expect(newAc).toMatchObject({ id: ac.id, answers: ["Andy Capp", "Ace"], updatedAt: 7000 });
+    expect(updated.items.find((i) => i.term === "CZ")!.answers).toEqual(["Czech", "Crazy Zone", "Citizen Z"]);
+    expect(updated.items.find((i) => i.term === "BD")!.updatedAt).toBe(1000);
+
+    const progress = (await repo.getProgress(deckId))!;
+    expect(progress.find((p) => p.pairId === ac.id)).toEqual(acProgressBefore);
+    expect(progress.find((p) => p.pairId === updated.items.at(-1)!.id)).toMatchObject({ stage: 0 });
+    expect(progress.map((p) => p.pairId)).toEqual(updated.items.map((i) => i.id));
+    expect(await repo.getHistory(deckId)).toHaveLength(1);
+  });
+
+  it("removes missing pairs and their progress when asked", async () => {
+    const { repo, deckId } = await setup();
+    const updated = await applyDeckUpdate(repo, deckId, file, { removeMissing: true }, 7000);
+
+    expect(updated.items.map((i) => i.term)).toEqual(["AC", "BD", "CZ", "ZZ"]);
+    expect((await repo.getProgress(deckId))!.map((p) => p.pairId)).toEqual(updated.items.map((i) => i.id));
+  });
+
+  it("detects when nothing would change", async () => {
+    const { deck } = await setup();
+    const same = listOf(deck.items.map((i) => [i.term, i.answers]));
+    const plan = planDeckUpdate(deck, same);
+    expect(deckUpdateHasChanges(plan, { removeMissing: true })).toBe(false);
+
+    const subset = listOf(deck.items.slice(1).map((i) => [i.term, i.answers]));
+    const subsetPlan = planDeckUpdate(deck, subset);
+    expect(deckUpdateHasChanges(subsetPlan, { removeMissing: false })).toBe(false);
+    expect(deckUpdateHasChanges(subsetPlan, { removeMissing: true })).toBe(true);
+  });
+
+  it("rejects files that list a pair twice", async () => {
+    const { deck } = await setup();
+    expect(() => planDeckUpdate(deck, listOf([["AB", ["x"]], ["ab", ["y"]]]))).toThrow(/more than once/);
+  });
+
+  it("the updated deck loads and reviews normally", async () => {
+    const { store, repo, deckId } = await setup();
+    await applyDeckUpdate(repo, deckId, file, { removeMissing: true }, 7000);
+    const result = await loadApp(new Repository(store), config, { now: 8000, onPersistError: () => {} });
+    expect(result.kind).toBe("ready");
+    if (result.kind === "ready") expect(result.app.engine.pairs).toHaveLength(4);
   });
 });

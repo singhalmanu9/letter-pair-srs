@@ -10,6 +10,10 @@
  * Importing is two-phase: `planImport` validates everything and reports
  * conflicts without writing; `applyImport` then writes. A file that fails
  * validation writes nothing.
+ *
+ * A deck list can instead update an existing deck (`planDeckUpdate` /
+ * `applyDeckUpdate`): pairs are matched by term, the file's answers win,
+ * and progress is kept.
  */
 
 import { syncProgress } from "./progress";
@@ -17,6 +21,7 @@ import { STORAGE_PREFIX, type Repository } from "./repository";
 import type { AsyncKeyValueStore } from "./storage";
 import {
   ValidationError,
+  termKey,
   parseDeck,
   parseHistory,
   parseProgress,
@@ -232,6 +237,122 @@ export async function applyImport(
   const first = result.imported[0];
   if (first && (!meta.activeDeckId || !ids.includes(meta.activeDeckId))) await repo.setActiveDeck(first);
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Updating an existing deck from a deck list (Anki-style "update")
+
+export interface AnswerChange {
+  term: string;
+  /** Answers in the file that the deck doesn't have. */
+  added: string[];
+  /** Answers the deck has that the file doesn't: these would disappear. */
+  removed: string[];
+}
+
+export interface DeckUpdatePlan {
+  deckId: string;
+  deckName: string;
+  /** Terms in the file but not the deck: added as new pairs. */
+  addedTerms: string[];
+  /** Terms in the deck but not the file: kept or removed, the user's choice. */
+  missingTerms: string[];
+  /** Matched pairs whose answers differ. Their progress is kept. */
+  changed: AnswerChange[];
+  /** Matched pairs with identical answers. */
+  unchangedCount: number;
+}
+
+export interface DeckUpdateOptions {
+  /** Remove pairs that are in the deck but not in the file. */
+  removeMissing: boolean;
+}
+
+/**
+ * Compare a deck with a deck list, matching pairs by term. For matched pairs
+ * the file's answers win; progress is never touched. Pure: writes nothing.
+ */
+export function planDeckUpdate(deck: Deck, list: DeckTemplate): DeckUpdatePlan {
+  const fileByTerm = new Map<string, DeckTemplate["items"][number]>();
+  for (const item of list.items) {
+    const key = termKey(item.term);
+    if (fileByTerm.has(key)) throw new ImportError(`The file lists ${item.term} more than once.`);
+    fileByTerm.set(key, item);
+  }
+  const deckTerms = new Set(deck.items.map((item) => termKey(item.term)));
+
+  const changed: AnswerChange[] = [];
+  const missingTerms: string[] = [];
+  let unchangedCount = 0;
+  for (const item of deck.items) {
+    const fromFile = fileByTerm.get(termKey(item.term));
+    if (!fromFile) {
+      missingTerms.push(item.term);
+      continue;
+    }
+    const added = fromFile.answers.filter((a) => !item.answers.includes(a));
+    const removed = item.answers.filter((a) => !fromFile.answers.includes(a));
+    if (added.length || removed.length) changed.push({ term: item.term, added, removed });
+    else unchangedCount += 1;
+  }
+
+  return {
+    deckId: deck.id,
+    deckName: deck.name,
+    addedTerms: list.items.filter((i) => !deckTerms.has(termKey(i.term))).map((i) => i.term),
+    missingTerms,
+    changed,
+    unchangedCount,
+  };
+}
+
+/** Whether applying the plan would change anything. */
+export function deckUpdateHasChanges(plan: DeckUpdatePlan, opts: DeckUpdateOptions): boolean {
+  return plan.addedTerms.length > 0 || plan.changed.length > 0 || (opts.removeMissing && plan.missingTerms.length > 0);
+}
+
+/**
+ * Apply a deck list to a stored deck: matched pairs take the file's answers
+ * (and file order) and keep their progress, new pairs are added, and pairs
+ * missing from the file are removed only if `removeMissing`. Returns the
+ * saved deck. Review history is kept as-is.
+ */
+export async function applyDeckUpdate(
+  repo: Repository,
+  deckId: string,
+  list: DeckTemplate,
+  opts: DeckUpdateOptions,
+  now: number,
+  newId: () => string = () => crypto.randomUUID(),
+): Promise<Deck> {
+  const deck = await repo.getDeck(deckId);
+  if (!deck) throw new ImportError("That deck no longer exists.");
+  const plan = planDeckUpdate(deck, list); // re-check against current data
+  const fileByTerm = new Map(list.items.map((item) => [termKey(item.term), item]));
+  const changedTerms = new Set(plan.changed.map((c) => termKey(c.term)));
+
+  const kept = deck.items
+    .filter((item) => !opts.removeMissing || fileByTerm.has(termKey(item.term)))
+    .map((item) => {
+      const fromFile = fileByTerm.get(termKey(item.term));
+      if (!fromFile) return item;
+      const answersChanged = changedTerms.has(termKey(item.term));
+      return { ...item, answers: [...fromFile.answers], updatedAt: answersChanged ? now : item.updatedAt };
+    });
+  const deckTerms = new Set(deck.items.map((item) => termKey(item.term)));
+  const added = list.items
+    .filter((item) => !deckTerms.has(termKey(item.term)))
+    .map((item) => ({ id: newId(), term: item.term, answers: [...item.answers], updatedAt: now }));
+
+  const updated: Deck = {
+    ...deck,
+    items: [...kept, ...added],
+    updatedAt: deckUpdateHasChanges(plan, opts) ? now : deck.updatedAt,
+  };
+  await repo.saveDeck(updated);
+  const progress = (await repo.getProgress(deckId)) ?? [];
+  await repo.saveProgress(deckId, syncProgress(updated, progress, now).pairs);
+  return updated;
 }
 
 /** Duplicate a bundle under fresh ids, carrying progress and history across. */

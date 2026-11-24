@@ -10,6 +10,7 @@ import {
   parsePairState,
   parseReviewEvent,
   recordAnswer,
+  removeAnswerFromPair,
   totalResponses,
   validatePairConsistency,
   type ReviewEvent,
@@ -106,6 +107,25 @@ describe("deck helpers", () => {
     expect(addAnswerToPair(deck, "q1", "   ", 60)).toBe(false);
     expect(addAnswerToPair(deck, "nope", "x", 60)).toBe(false);
     expect(deck.updatedAt).toBe(50);
+  });
+});
+
+describe("removing answers", () => {
+  it("removes an answer and bumps updatedAt", () => {
+    const deck = makeDeck([["q1", "AC", ["Andy Capp", "Ace"]]]);
+    expect(removeAnswerFromPair(deck, "q1", "Ace", 70)).toBe(true);
+    expect(deck.items[0]!.answers).toEqual(["Andy Capp"]);
+    expect(deck.items[0]!.updatedAt).toBe(70);
+    expect(deck.updatedAt).toBe(70);
+  });
+
+  it("refuses to remove the last answer, a missing answer, or from a missing pair", () => {
+    const deck = makeDeck([["q1", "AC", ["Andy Capp"]]]);
+    expect(removeAnswerFromPair(deck, "q1", "Andy Capp", 70)).toBe(false);
+    expect(removeAnswerFromPair(deck, "q1", "nope", 70)).toBe(false);
+    expect(removeAnswerFromPair(deck, "zz", "Andy Capp", 70)).toBe(false);
+    expect(deck.items[0]!.answers).toEqual(["Andy Capp"]);
+    expect(deck.updatedAt).toBe(0);
   });
 });
 

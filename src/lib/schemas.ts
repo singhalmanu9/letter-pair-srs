@@ -212,7 +212,7 @@ export function validateDeck(deck: Deck): true {
   const terms = new Set<string>();
   for (const item of deck.items) {
     if (ids.has(item.id)) throw new ValidationError(`Duplicate item id in deck: ${item.id}`);
-    const term = item.term.trim().toUpperCase();
+    const term = termKey(item.term);
     if (terms.has(term)) throw new ValidationError(`Duplicate term in deck: ${item.term}`);
     ids.add(item.id);
     terms.add(term);
@@ -249,6 +249,26 @@ export function addAnswerToPair(deck: Deck, pairId: string, answer: string, now:
   item.updatedAt = now;
   deck.updatedAt = now;
   return true;
+}
+
+/**
+ * Remove an accepted answer from a pair. Returns false if the pair or answer
+ * doesn't exist, or if it's the pair's last answer (every pair needs one).
+ */
+export function removeAnswerFromPair(deck: Deck, pairId: string, answer: string, now: number): boolean {
+  const item = getItemById(deck, pairId);
+  if (!item || item.answers.length <= 1) return false;
+  const index = item.answers.indexOf(answer);
+  if (index === -1) return false;
+  item.answers.splice(index, 1);
+  item.updatedAt = now;
+  deck.updatedAt = now;
+  return true;
+}
+
+/** Normalized form used to match terms (case- and whitespace-insensitive). */
+export function termKey(term: string): string {
+  return term.trim().toUpperCase();
 }
 
 // ---------------------------------------------------------------------------
