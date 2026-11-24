@@ -1,17 +1,17 @@
-/** Core review engine: due selection and scheduling transitions. */
+/** Core review engine: due selection and stage transitions. */
 
-import { DEFAULT_CONFIG, nowSeconds, type SRSConfig } from "./config";
+import { DEFAULT_CONFIG, type AppConfig } from "./config";
 import {
   ReviewResult,
   recordAnswer,
+  validateDeck,
   validatePairConsistency,
-  validateState,
   type Deck,
   type DeckItem,
   type PairState,
   type ReviewEvent,
-  type SRSState,
 } from "./schemas";
+import { burnedStage, nextDueAt, stageAfterFail, stageAfterPass } from "./srs";
 
 export interface SessionStats {
   total: number;
@@ -19,6 +19,7 @@ export interface SessionStats {
   failed: number;
   timedOut: number;
   responses: number;
+  /** Passes over all reviews, timeouts included. */
   passRate: number;
 }
 
@@ -26,87 +27,111 @@ export class ReviewEngine {
   private readonly itemById: Map<string, DeckItem>;
   private readonly pairById: Map<string, PairState>;
 
+  /**
+   * `pairs` must match the deck one-to-one (use `syncProgress` first).
+   * The engine mutates the pair objects in place.
+   */
   constructor(
     readonly deck: Deck,
-    readonly state: SRSState,
-    readonly config: SRSConfig = DEFAULT_CONFIG,
+    readonly pairs: readonly PairState[],
+    readonly config: AppConfig = DEFAULT_CONFIG,
   ) {
-    validateState(deck, state);
+    validateDeck(deck);
     this.itemById = new Map(deck.items.map((item) => [item.id, item]));
-    this.pairById = new Map(state.pairs.map((pair) => [pair.pair_id, pair]));
+    this.pairById = new Map(pairs.map((pair) => [pair.pairId, pair]));
+
+    for (const pair of pairs) {
+      if (!this.itemById.has(pair.pairId)) throw new Error(`Pair ${pair.pairId} not found in deck`);
+      validatePairConsistency(pair);
+    }
+    for (const item of deck.items) {
+      if (!this.pairById.has(item.id)) throw new Error(`No progress for deck item ${item.id}; sync progress first`);
+    }
   }
 
   /** Earliest-due pair state among currently due pairs. */
-  getDuePairState(now: number = nowSeconds()): PairState | null {
+  getDuePairState(now: number): PairState | null {
     let earliest: PairState | null = null;
-    for (const pair of this.state.pairs) {
-      if (pair.next_due <= now && (earliest === null || pair.next_due < earliest.next_due)) {
-        earliest = pair;
-      }
+    for (const pair of this.pairs) {
+      if (pair.nextDueAt === null || pair.nextDueAt > now) continue;
+      if (earliest === null || pair.nextDueAt < (earliest.nextDueAt as number)) earliest = pair;
     }
     return earliest;
   }
 
   /** Deck item for the earliest-due pair, or null if none is due. */
-  getDuePair(now: number = nowSeconds()): DeckItem | null {
+  getDuePair(now: number): DeckItem | null {
     const due = this.getDuePairState(now);
-    return due ? (this.itemById.get(due.pair_id) ?? null) : null;
+    return due ? (this.itemById.get(due.pairId) ?? null) : null;
   }
 
-  /** Seconds until the next pair is due, or null if there are no pairs. */
-  secondsUntilNextDue(now: number = nowSeconds()): number | null {
-    if (this.state.pairs.length === 0) return null;
-    const nextDue = Math.min(...this.state.pairs.map((pair) => pair.next_due));
-    return Math.max(0, nextDue - now);
+  getItem(pairId: string): DeckItem | undefined {
+    return this.itemById.get(pairId);
   }
 
-  recordPass(
-    pairId: string,
-    elapsedSeconds: number,
-    userAnswer: string | null = null,
-    now: number = nowSeconds(),
-  ): ReviewEvent {
+  dueCount(now: number): number {
+    return this.pairs.filter((p) => p.nextDueAt !== null && p.nextDueAt <= now).length;
+  }
+
+  /** Milliseconds until the next pair is due, or null if nothing is scheduled. */
+  msUntilNextDue(now: number): number | null {
+    const times = this.pairs.map((p) => p.nextDueAt).filter((t): t is number => t !== null);
+    if (times.length === 0) return null;
+    return Math.max(0, Math.min(...times) - now);
+  }
+
+  /** Number of pairs at each stage, indexed by stage number (0 = new … last = burned). */
+  stageCounts(): number[] {
+    const counts = new Array<number>(burnedStage(this.config.srs) + 1).fill(0);
+    for (const pair of this.pairs) counts[pair.stage] = (counts[pair.stage] ?? 0) + 1;
+    return counts;
+  }
+
+  recordPass(pairId: string, elapsedMs: number, userAnswer: string | null, now: number): ReviewEvent {
     const pair = this.getPair(pairId);
-    pair.response_count += 1;
-    pair.pass_count += 1;
+    pair.responseCount += 1;
+    pair.passCount += 1;
     if (userAnswer) recordAnswer(pair, userAnswer);
-
-    const grown = Math.round(pair.current_interval * this.config.passIntervalMultiplier);
-    pair.current_interval = Math.max(1, grown);
-    pair.next_due = now + pair.current_interval;
-    validatePairConsistency(pair);
-
-    return this.buildEvent(pairId, ReviewResult.PASS, elapsedSeconds, now, userAnswer, null);
+    return this.moveToStage(pair, stageAfterPass(pair.stage, this.config.srs), {
+      result: ReviewResult.PASS,
+      elapsedMs,
+      userAnswer,
+      reason: null,
+      now,
+    });
   }
 
   recordFail(
     pairId: string,
-    elapsedSeconds: number,
-    userAnswer: string | null = null,
-    now: number = nowSeconds(),
+    elapsedMs: number,
+    userAnswer: string | null,
+    now: number,
     reason: string | null = null,
   ): ReviewEvent {
     const pair = this.getPair(pairId);
-    pair.response_count += 1;
-    pair.fail_count += 1;
+    pair.responseCount += 1;
+    pair.failCount += 1;
     if (userAnswer) recordAnswer(pair, userAnswer);
-
-    pair.current_interval = this.config.failIntervalReset;
-    pair.next_due = now + pair.current_interval;
-    validatePairConsistency(pair);
-
-    return this.buildEvent(pairId, ReviewResult.FAIL, elapsedSeconds, now, userAnswer, reason);
+    return this.moveToStage(pair, stageAfterFail(pair.stage, this.config.srs), {
+      result: ReviewResult.FAIL,
+      elapsedMs,
+      userAnswer,
+      reason,
+      now,
+    });
   }
 
-  /** Timeout has the same scheduling effect as a fail, but isn't a response. */
-  recordTimeout(pairId: string, elapsedSeconds: number, now: number = nowSeconds()): ReviewEvent {
+  /** A timeout schedules like a fail but doesn't count as a response. */
+  recordTimeout(pairId: string, now: number): ReviewEvent {
     const pair = this.getPair(pairId);
-    pair.timeout_count += 1;
-    pair.current_interval = this.config.failIntervalReset;
-    pair.next_due = now + pair.current_interval;
-    validatePairConsistency(pair);
-
-    return this.buildEvent(pairId, ReviewResult.TIMEOUT, elapsedSeconds, now, null, "timeout");
+    pair.timeoutCount += 1;
+    return this.moveToStage(pair, stageAfterFail(pair.stage, this.config.srs), {
+      result: ReviewResult.TIMEOUT,
+      elapsedMs: this.config.timeoutMs,
+      userAnswer: null,
+      reason: "timeout",
+      now,
+    });
   }
 
   static getSessionStats(events: readonly ReviewEvent[]): SessionStats {
@@ -114,49 +139,48 @@ export class ReviewEngine {
     const passed = events.filter((e) => e.result === ReviewResult.PASS).length;
     const failed = events.filter((e) => e.result === ReviewResult.FAIL).length;
     const timedOut = events.filter((e) => e.result === ReviewResult.TIMEOUT).length;
-    const responses = passed + failed;
-
-    if (total - timedOut !== responses) {
-      throw new Error("Session consistency error: total responses - timed_out must equal responses");
-    }
-
     return {
       total,
       passed,
       failed,
       timedOut,
-      responses,
+      responses: passed + failed,
       passRate: total ? passed / total : 0,
     };
   }
 
   private getPair(pairId: string): PairState {
     const pair = this.pairById.get(pairId);
-    if (!pair) throw new Error(`Unknown pair_id: ${pairId}`);
-    validatePairConsistency(pair);
+    if (!pair) throw new Error(`Unknown pair: ${pairId}`);
+    if (pair.nextDueAt === null) throw new Error(`Pair ${pairId} is burned and can't be reviewed`);
     return pair;
   }
 
-  private buildEvent(
-    pairId: string,
-    result: ReviewResult,
-    elapsedSeconds: number,
-    now: number,
-    userAnswer: string | null,
-    reason: string | null,
+  private moveToStage(
+    pair: PairState,
+    stage: number,
+    e: { result: ReviewResult; elapsedMs: number; userAnswer: string | null; reason: string | null; now: number },
   ): ReviewEvent {
-    const item = this.itemById.get(pairId);
-    if (!item) throw new Error(`Unknown pair_id in deck: ${pairId}`);
+    const stageBefore = pair.stage;
+    pair.stage = stage;
+    pair.nextDueAt = nextDueAt(stage, e.now, this.config.srs);
+    pair.updatedAt = e.now;
+    validatePairConsistency(pair);
+
+    const item = this.itemById.get(pair.pairId);
+    if (!item) throw new Error(`Unknown pair in deck: ${pair.pairId}`);
 
     return {
-      pair_id: pairId,
+      pairId: pair.pairId,
       term: item.term,
-      result,
-      elapsed_seconds: elapsedSeconds,
-      timestamp: new Date(now * 1000).toISOString(),
-      timeout_seconds: this.config.timeoutSeconds,
-      user_answer: userAnswer,
-      reason,
+      result: e.result,
+      stageBefore,
+      stageAfter: stage,
+      elapsedMs: e.elapsedMs,
+      timeoutMs: this.config.timeoutMs,
+      reviewedAt: e.now,
+      userAnswer: e.userAnswer,
+      reason: e.reason,
     };
   }
 }

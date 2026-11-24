@@ -1,0 +1,12 @@
+{
+  "id": "sample",
+  "name": "Sample deck",
+  "description": "A handful of example pairs to try the app out.",
+  "items": [
+    { "term": "AC", "answers": ["Andy Capp", "Andy Cappuccino", "Awesome Coffee"] },
+    { "term": "BD", "answers": ["Big Deal", "Bad Day", "Board"] },
+    { "term": "CZ", "answers": ["Crazy Zone", "Czech", "Citizen Z"] },
+    { "term": "DF", "answers": ["Dumb Funny", "Dark Forest", "Do First"] },
+    { "term": "EG", "answers": ["Egg", "Example Given", "Epic Gamer"] }
+  ]
+}

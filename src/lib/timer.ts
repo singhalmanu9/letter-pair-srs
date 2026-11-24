@@ -1,12 +1,12 @@
-/** Tracks elapsed and remaining time for a single review prompt (seconds). */
+/** Tracks elapsed and remaining time for a single review prompt (milliseconds). */
 export class ReviewTimer {
   constructor(
     readonly startedAt: number,
-    readonly timeoutSeconds: number,
+    readonly timeoutMs: number,
   ) {}
 
   get deadline(): number {
-    return this.startedAt + this.timeoutSeconds;
+    return this.startedAt + this.timeoutMs;
   }
 
   elapsed(now: number): number {

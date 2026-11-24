@@ -1,123 +1,127 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CONFIG } from "../src/lib/config";
 import { ReviewEngine } from "../src/lib/engine";
-import { ReviewResult, makePairState, makeReviewEvent, type Deck, type PairState } from "../src/lib/schemas";
+import { ReviewResult, type PairState, type ReviewEvent } from "../src/lib/schemas";
+import { config, DAY, HOUR, makeDeck, makePair } from "./helpers";
 
-const config = DEFAULT_CONFIG;
-const expectedPassInterval = (current: number) =>
-  Math.max(1, Math.round(current * config.passIntervalMultiplier));
-
-const makeEngine = (items: [string, string][], pairs: PairState[]) => {
-  const deck: Deck = { version: "1.0", items: items.map(([id, term]) => ({ id, term, answers: ["x"] })) };
-  return new ReviewEngine(deck, { version: "1.0", pairs }, config);
-};
+const engineFor = (pairs: PairState[]) =>
+  new ReviewEngine(makeDeck(pairs.map((p, i) => [p.pairId, `T${i}`])), pairs, config);
 
 describe("ReviewEngine", () => {
-  it("get due pair returns earliest due", () => {
-    const engine = makeEngine(
-      [["q1", "AC"], ["q2", "BD"]],
-      [
-        makePairState({ pair_id: "q1", next_due: 90, current_interval: 60 }),
-        makePairState({ pair_id: "q2", next_due: 95, current_interval: 60 }),
-      ],
-    );
-    expect(engine.getDuePair(100)?.id).toBe("q1");
+  it("returns the earliest due pair", () => {
+    const engine = engineFor([makePair("q1", { nextDueAt: 95 }), makePair("q2", { nextDueAt: 90 })]);
+    expect(engine.getDuePair(100)?.id).toBe("q2");
+    expect(engine.dueCount(100)).toBe(2);
   });
 
-  it("get due pair is null when nothing is due", () => {
-    const engine = makeEngine([["q1", "AC"]], [makePairState({ pair_id: "q1", next_due: 200, current_interval: 60 })]);
+  it("returns null when nothing is due, and reports time until the next", () => {
+    const engine = engineFor([makePair("q1", { nextDueAt: 200 })]);
     expect(engine.getDuePair(100)).toBeNull();
-    expect(engine.secondsUntilNextDue(100)).toBe(100);
+    expect(engine.msUntilNextDue(100)).toBe(100);
   });
 
-  it("record pass updates counts, schedule and history", () => {
-    const pair = makePairState({
-      pair_id: "q1",
-      next_due: 100,
-      current_interval: 100,
-      response_count: 2,
-      pass_count: 1,
-      fail_count: 1,
-    });
-    const engine = makeEngine([["q1", "AC"]], [pair]);
+  it("never schedules burned pairs", () => {
+    const engine = engineFor([makePair("q1", { stage: 9, nextDueAt: null })]);
+    expect(engine.getDuePair(Number.MAX_SAFE_INTEGER)).toBeNull();
+    expect(engine.msUntilNextDue(0)).toBeNull();
+    expect(() => engine.recordPass("q1", 0, null, 0)).toThrow(/burned/);
+  });
 
-    const event = engine.recordPass("q1", 7.25, "apple", 200);
+  it("requires progress to match the deck", () => {
+    expect(() => new ReviewEngine(makeDeck([["q1", "AC"]]), [], config)).toThrow(/sync/);
+    expect(() => new ReviewEngine(makeDeck([]), [makePair("q1")], config)).toThrow(/not found/);
+  });
 
-    const expected = expectedPassInterval(100);
+  it("pass moves up a stage and schedules the stage interval", () => {
+    const pair = makePair("q1", { stage: 2, responseCount: 2, passCount: 1, failCount: 1 });
+    const engine = new ReviewEngine(makeDeck([["q1", "AC"]]), [pair], config);
+
+    const event = engine.recordPass("q1", 7250, "apple", 1000);
+
     expect(pair).toMatchObject({
-      response_count: 3,
-      pass_count: 2,
-      fail_count: 1,
-      timeout_count: 0,
-      current_interval: expected,
-      next_due: 200 + expected,
-      answer_history: { apple: 1 },
+      stage: 3,
+      nextDueAt: 1000 + 1 * DAY,
+      responseCount: 3,
+      passCount: 2,
+      failCount: 1,
+      timeoutCount: 0,
+      answerHistory: { apple: 1 },
+      updatedAt: 1000,
     });
-    expect(event).toEqual({
-      pair_id: "q1",
+    expect(event).toEqual<ReviewEvent>({
+      pairId: "q1",
       term: "AC",
       result: ReviewResult.PASS,
-      elapsed_seconds: 7.25,
-      timeout_seconds: config.timeoutSeconds,
-      user_answer: "apple",
+      stageBefore: 2,
+      stageAfter: 3,
+      elapsedMs: 7250,
+      timeoutMs: config.timeoutMs,
+      reviewedAt: 1000,
+      userAnswer: "apple",
       reason: null,
-      timestamp: "1970-01-01T00:03:20.000Z",
     });
   });
 
-  it("record fail resets interval and returns a fail event", () => {
-    const pair = makePairState({ pair_id: "q1", next_due: 100, current_interval: 300 });
-    const engine = makeEngine([["q1", "AC"]], [pair]);
-
-    const event = engine.recordFail("q1", 8, "apples", 250);
-
-    expect(pair).toMatchObject({
-      response_count: 1,
-      pass_count: 0,
-      fail_count: 1,
-      timeout_count: 0,
-      current_interval: config.failIntervalReset,
-      next_due: 250 + config.failIntervalReset,
-      answer_history: { apples: 1 },
-    });
-    expect(event.result).toBe(ReviewResult.FAIL);
-    expect(event.user_answer).toBe("apples");
-    expect(event.reason).toBeNull();
+  it("first pass of a new pair schedules Apprentice 1 (4 hours)", () => {
+    const pair = makePair("q1");
+    engineFor([pair]).recordPass("q1", 0, null, 0);
+    expect(pair).toMatchObject({ stage: 1, nextDueAt: 4 * HOUR });
   });
 
-  it("record timeout is treated as a fail for scheduling", () => {
-    const pair = makePairState({
-      pair_id: "q1",
-      next_due: 100,
-      current_interval: 300,
-      response_count: 5,
-      pass_count: 3,
-      fail_count: 2,
-    });
-    const engine = makeEngine([["q1", "AC"]], [pair]);
+  it("passing Enlightened burns the pair", () => {
+    const pair = makePair("q1", { stage: 8 });
+    engineFor([pair]).recordPass("q1", 0, null, 0);
+    expect(pair).toMatchObject({ stage: 9, nextDueAt: null });
+  });
 
-    const event = engine.recordTimeout("q1", config.timeoutSeconds, 400);
+  it("fail drops stages per the penalty and schedules the new stage", () => {
+    const apprentice = makePair("q1", { stage: 3 });
+    const guru = makePair("q2", { stage: 6 });
+    const engine = engineFor([apprentice, guru]);
+
+    const event = engine.recordFail("q1", 8000, "apples", 500);
+    engine.recordFail("q2", 8000, null, 500);
+
+    expect(apprentice).toMatchObject({
+      stage: 2,
+      nextDueAt: 500 + 8 * HOUR,
+      responseCount: 1,
+      failCount: 1,
+      answerHistory: { apples: 1 },
+    });
+    expect(guru).toMatchObject({ stage: 4, nextDueAt: 500 + 2 * DAY });
+    expect(event).toMatchObject({ result: ReviewResult.FAIL, stageBefore: 3, stageAfter: 2, reason: null });
+  });
+
+  it("timeout schedules like a fail without counting a response", () => {
+    const pair = makePair("q1", { stage: 5, responseCount: 5, passCount: 3, failCount: 2 });
+    const event = engineFor([pair]).recordTimeout("q1", 400);
 
     expect(pair).toMatchObject({
-      response_count: 5,
-      pass_count: 3,
-      fail_count: 2,
-      timeout_count: 1,
-      current_interval: config.failIntervalReset,
-      next_due: 400 + config.failIntervalReset,
-      answer_history: {},
+      stage: 3,
+      nextDueAt: 400 + 1 * DAY,
+      responseCount: 5,
+      timeoutCount: 1,
+      answerHistory: {},
     });
-    expect(event.result).toBe(ReviewResult.TIMEOUT);
-    expect(event.user_answer).toBeNull();
-    expect(event.reason).toBe("timeout");
+    expect(event).toMatchObject({
+      result: ReviewResult.TIMEOUT,
+      elapsedMs: config.timeoutMs,
+      userAnswer: null,
+      reason: "timeout",
+    });
+  });
+
+  it("counts pairs per stage", () => {
+    const engine = engineFor([makePair("a"), makePair("b"), makePair("c", { stage: 5 }), makePair("d", { stage: 9, nextDueAt: null })]);
+    expect(engine.stageCounts()).toEqual([2, 0, 0, 0, 0, 1, 0, 0, 0, 1]);
   });
 
   it("session stats", () => {
-    const base = { elapsed_seconds: 3, timestamp: "2026-03-31T10:00:00", timeout_seconds: config.timeoutSeconds };
+    const base = { term: "T", stageBefore: 0, stageAfter: 1, elapsedMs: 0, timeoutMs: 0, reviewedAt: 0, userAnswer: null };
     const stats = ReviewEngine.getSessionStats([
-      makeReviewEvent({ ...base, pair_id: "q1", term: "AC", result: ReviewResult.PASS }),
-      makeReviewEvent({ ...base, pair_id: "q2", term: "BD", result: ReviewResult.FAIL }),
-      makeReviewEvent({ ...base, pair_id: "q3", term: "CE", result: ReviewResult.TIMEOUT, reason: "timeout" }),
+      { ...base, pairId: "q1", result: ReviewResult.PASS, reason: null },
+      { ...base, pairId: "q2", result: ReviewResult.FAIL, reason: null },
+      { ...base, pairId: "q3", result: ReviewResult.TIMEOUT, reason: "timeout" },
     ]);
     expect(stats).toMatchObject({ total: 3, passed: 1, failed: 1, timedOut: 1, responses: 2 });
     expect(stats.passRate).toBeCloseTo(1 / 3);

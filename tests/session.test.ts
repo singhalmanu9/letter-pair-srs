@@ -1,264 +1,157 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_CONFIG } from "../src/lib/config";
 import { ReviewEngine } from "../src/lib/engine";
-import { ReviewResult, makePairState, type ReviewEvent, type SRSState } from "../src/lib/schemas";
-import { SessionController, type ActiveReviewSnapshot } from "../src/lib/session";
+import { ReviewResult, type ActiveReviewSnapshot, type PairState, type ReviewEvent } from "../src/lib/schemas";
+import { SessionController } from "../src/lib/session";
+import { config, HOUR, makeDeck, makePair } from "./helpers";
 
-const config = DEFAULT_CONFIG;
+const T = config.timeoutMs;
 
 describe("SessionController", () => {
-  let state: SRSState;
+  let pairs: PairState[];
   let session: SessionController;
-  let savedStates: SRSState[];
-  let appendedEvents: ReviewEvent[];
+  let progressSaves: number;
+  let events: ReviewEvent[];
+  let snapshots: ActiveReviewSnapshot[];
+  let clears: number;
 
-  const pair = (id: string) => state.pairs.find((p) => p.pair_id === id)!;
+  const pair = (id: string) => pairs.find((p) => p.pairId === id)!;
 
   beforeEach(() => {
-    state = {
-      version: "1.0",
-      pairs: [
-        makePairState({ pair_id: "q1", next_due: 10, current_interval: 60 }),
-        makePairState({ pair_id: "q2", next_due: 20, current_interval: 60 }),
-      ],
-    };
-    const engine = new ReviewEngine(
-      {
-        version: "1.0",
-        items: [
-          { id: "q1", term: "AC", answers: ["apple", "apricot"] },
-          { id: "q2", term: "BD", answers: ["boat"] },
-        ],
+    pairs = [makePair("q1", { nextDueAt: 10 }), makePair("q2", { nextDueAt: 20 })];
+    const deck = makeDeck([
+      ["q1", "AC", ["apple", "apricot"]],
+      ["q2", "BD", ["boat"]],
+    ]);
+    progressSaves = 0;
+    events = [];
+    snapshots = [];
+    clears = 0;
+    session = new SessionController(new ReviewEngine(deck, pairs, config), {
+      saveProgress: () => {
+        progressSaves += 1;
       },
-      state,
-      config,
-    );
-    savedStates = [];
-    appendedEvents = [];
-    session = new SessionController(engine, {
-      saveState: (s) => savedStates.push(s),
-      appendEvent: (e) => appendedEvents.push(e),
+      appendEvent: (e) => events.push(e),
+      saveActiveReview: (s) => snapshots.push(s),
+      clearActiveReview: () => {
+        clears += 1;
+      },
     });
   });
 
-  it("start next review selects the due pair and sets the timer", () => {
-    const item = session.startNextReview(12);
-    expect(item?.id).toBe("q1");
+  it("starts the earliest due pair with a full timer", () => {
+    expect(session.startNextReview(12)?.id).toBe("q1");
     expect(session.activeReview?.pairId).toBe("q1");
-    expect(session.timeRemaining(12)).toBe(config.timeoutSeconds);
+    expect(session.timeRemaining(12)).toBe(T);
   });
 
-  it("start next review throws when a review is active", () => {
+  it("refuses to start while a review is active", () => {
     session.startNextReview(12);
     expect(() => session.startNextReview(13)).toThrow();
+  });
+
+  it("returns null when nothing is due", () => {
+    expect(session.startNextReview(5)).toBeNull();
+    expect(session.activeReview).toBeNull();
   });
 
   it("reveal then pass records the event and persists", () => {
     session.startNextReview(12);
     expect(session.revealAnswers(13)).toEqual(["apple", "apricot"]);
 
-    const event = session.gradePass("apple", 15);
-    expect(event.result).toBe(ReviewResult.PASS);
-    expect(event.user_answer).toBe("apple");
-    expect(event.timeout_seconds).toBe(config.timeoutSeconds);
-    expect(event.elapsed_seconds).toBeCloseTo(3);
-
+    const event = session.gradePass("apple", 3012);
+    expect(event).toMatchObject({ result: ReviewResult.PASS, userAnswer: "apple", elapsedMs: 3000, timeoutMs: T });
     expect(session.activeReview).toBeNull();
     expect(session.reviewedEvents).toHaveLength(1);
-    expect(appendedEvents).toHaveLength(1);
-    expect(savedStates).toHaveLength(1);
+    expect(events).toHaveLength(1);
+    expect(progressSaves).toBe(1);
+    expect(pair("q1")).toMatchObject({ stage: 1, nextDueAt: 3012 + 4 * HOUR, passCount: 1 });
   });
 
-  it("grade pass updates schedule and counters", () => {
-    const initialInterval = pair("q1").current_interval;
-    session.startNextReview(12);
-    session.revealAnswers(13);
-    session.gradePass("apple", 15);
-
-    const expected = Math.max(1, Math.round(initialInterval * config.passIntervalMultiplier));
-    expect(pair("q1")).toMatchObject({
-      pass_count: 1,
-      fail_count: 0,
-      timeout_count: 0,
-      response_count: 1,
-      current_interval: expected,
-      next_due: 15 + expected,
-      answer_history: { apple: 1 },
-    });
-  });
-
-  it("grade fail updates schedule and counters", () => {
+  it("fail updates the pair", () => {
     session.startNextReview(12);
     session.revealAnswers(13);
     session.gradeFail("wrong", 16);
-
-    expect(pair("q1")).toMatchObject({
-      pass_count: 0,
-      fail_count: 1,
-      timeout_count: 0,
-      response_count: 1,
-      current_interval: config.failIntervalReset,
-      next_due: 16 + config.failIntervalReset,
-      answer_history: { wrong: 1 },
-    });
-  });
-
-  it("timeout updates schedule without incrementing responses", () => {
-    session.startNextReview(12);
-    const timeoutAt = 12 + config.timeoutSeconds;
-    session.checkTimeout(timeoutAt);
-
-    expect(pair("q1")).toMatchObject({
-      pass_count: 0,
-      fail_count: 0,
-      timeout_count: 1,
-      response_count: 0,
-      current_interval: config.failIntervalReset,
-      next_due: timeoutAt + config.failIntervalReset,
-      answer_history: {},
-    });
+    expect(pair("q1")).toMatchObject({ stage: 1, failCount: 1, responseCount: 1, answerHistory: { wrong: 1 } });
   });
 
   it("grading without reveal throws", () => {
     session.startNextReview(12);
-    expect(() => session.gradeFail("wrong", 13)).toThrow();
+    expect(() => session.gradeFail("wrong", 13)).toThrow(/reveal/);
   });
 
-  it("timeout records once and blocks grading", () => {
+  it("timeout records once, without a response, and blocks grading and reveal", () => {
     session.startNextReview(12);
-    const timeoutAt = 12 + config.timeoutSeconds;
+    const timeoutAt = 12 + T;
 
     const event = session.checkTimeout(timeoutAt);
-    expect(event?.result).toBe(ReviewResult.TIMEOUT);
-    expect(event?.reason).toBe("timeout");
-    expect(event?.elapsed_seconds).toBe(config.timeoutSeconds);
+    expect(event).toMatchObject({ result: ReviewResult.TIMEOUT, reason: "timeout", elapsedMs: T });
+    expect(pair("q1")).toMatchObject({ timeoutCount: 1, responseCount: 0 });
 
     expect(session.checkTimeout(timeoutAt + 5)).toBeNull();
-    expect(session.reviewedEvents).toHaveLength(1);
-    expect(appendedEvents).toHaveLength(1);
-    expect(savedStates).toHaveLength(1);
-
+    expect(events).toHaveLength(1);
+    expect(progressSaves).toBe(1);
     expect(() => session.gradePass("apple", timeoutAt + 5)).toThrow();
+    expect(() => session.revealAnswers(timeoutAt + 5)).toThrow();
   });
 
-  it("reveal after timeout throws", () => {
+  it("grading after the deadline records a timeout instead", () => {
     session.startNextReview(12);
-    const timeoutAt = 12 + config.timeoutSeconds;
-    session.checkTimeout(timeoutAt);
-    expect(() => session.revealAnswers(timeoutAt + 1)).toThrow();
-  });
-
-  it("returns null when no pair is due", () => {
-    expect(session.startNextReview(5)).toBeNull();
-    expect(session.activeReview).toBeNull();
+    session.revealAnswers(13);
+    expect(() => session.gradePass("apple", 12 + T)).toThrow(/timed out/);
+    expect(events.at(-1)?.result).toBe(ReviewResult.TIMEOUT);
   });
 
   it("session stats match recorded events", () => {
     session.startNextReview(12);
     session.revealAnswers(13);
     session.gradePass("apple", 15);
-
     session.startNextReview(22);
     session.revealAnswers(23);
     session.gradeFail("wrong", 24);
 
-    expect(session.getSessionStats()).toMatchObject({
-      total: 2,
-      passed: 1,
-      failed: 1,
-      timedOut: 0,
-      responses: 2,
-    });
-  });
-});
-
-describe("SessionController recovery", () => {
-  let state: SRSState;
-  let session: SessionController;
-  let savedSnapshots: ActiveReviewSnapshot[];
-  let clearedCount: number;
-  let appendedEvents: ReviewEvent[];
-  let savedStates: SRSState[];
-
-  const snapshot = (overrides: Partial<ActiveReviewSnapshot> = {}): ActiveReviewSnapshot => ({
-    pair_id: "q1",
-    term: "AC",
-    answers: ["apple", "apricot"],
-    started_at: 12,
-    timeout_seconds: config.timeoutSeconds,
-    revealed: false,
-    ...overrides,
+    expect(session.getSessionStats()).toMatchObject({ total: 2, passed: 1, failed: 1, timedOut: 0, responses: 2 });
   });
 
-  beforeEach(() => {
-    state = { version: "1.0", pairs: [makePairState({ pair_id: "q1", next_due: 10, current_interval: 60 })] };
-    const engine = new ReviewEngine(
-      { version: "1.0", items: [{ id: "q1", term: "AC", answers: ["apple", "apricot"] }] },
-      state,
-      config,
-    );
-    savedSnapshots = [];
-    clearedCount = 0;
-    appendedEvents = [];
-    savedStates = [];
-    session = new SessionController(engine, {
-      saveState: (s) => savedStates.push(s),
-      appendEvent: (e) => appendedEvents.push(e),
-      saveActiveReview: (s) => savedSnapshots.push(s),
-      clearActiveReview: () => {
-        clearedCount += 1;
-      },
-    });
-  });
-
-  it("start and reveal persist a snapshot, grading clears it", () => {
+  it("start and reveal save snapshots; grading clears", () => {
     session.startNextReview(12);
-    expect(savedSnapshots).toHaveLength(1);
-    expect(savedSnapshots.at(-1)?.revealed).toBe(false);
-
+    expect(snapshots.at(-1)).toEqual({ deckId: "deck1", pairId: "q1", startedAt: 12, revealed: false });
     session.revealAnswers(13);
-    expect(savedSnapshots).toHaveLength(2);
-    expect(savedSnapshots.at(-1)?.revealed).toBe(true);
-
-    expect(session.gradePass("apple", 15).result).toBe(ReviewResult.PASS);
-    expect(session.activeReview).toBeNull();
-    expect(clearedCount).toBe(1);
-    expect(savedStates).toHaveLength(1);
-    expect(appendedEvents).toHaveLength(1);
+    expect(snapshots.at(-1)?.revealed).toBe(true);
+    session.gradePass(null, 15);
+    expect(clears).toBe(1);
   });
 
-  it("restores an active review and continues the flow", () => {
-    session.restoreActiveReview(snapshot({ revealed: true }), 1000);
-    expect(session.activeReview?.revealed).toBe(true);
-    expect(session.activeReview?.timer.startedAt).toBe(1000);
-
-    // Must not time out based on the old snapshot timestamp.
-    expect(session.checkTimeout(1000 + config.timeoutSeconds - 1)).toBeNull();
-
-    expect(session.gradeFail("wrong", 1003).result).toBe(ReviewResult.FAIL);
-    expect(state.pairs[0]).toMatchObject({
-      response_count: 1,
-      fail_count: 1,
-      next_due: 1003 + config.failIntervalReset,
+  describe("restore", () => {
+    const snap = (overrides: Partial<ActiveReviewSnapshot> = {}): ActiveReviewSnapshot => ({
+      deckId: "deck1",
+      pairId: "q2",
+      startedAt: 1,
+      revealed: true,
+      ...overrides,
     });
-    expect(clearedCount).toBe(1);
-  });
 
-  it("restore restarts the full timeout window", () => {
-    const restoreNow = 5000;
-    session.restoreActiveReview(snapshot({ started_at: 1 }), restoreNow);
-    expect(session.timeRemaining(restoreNow)).toBe(config.timeoutSeconds);
-    expect(session.checkTimeout(restoreNow + config.timeoutSeconds)?.result).toBe(ReviewResult.TIMEOUT);
-  });
+    it("resumes with a fresh timer and current answers", () => {
+      expect(session.restoreActiveReview(snap(), 5000)).toBe(true);
+      expect(session.activeReview).toMatchObject({ pairId: "q2", term: "BD", answers: ["boat"], revealed: true });
+      expect(session.timeRemaining(5000)).toBe(T);
+      expect(session.checkTimeout(5000 + T - 1)).toBeNull();
 
-  it("restoring an invalid snapshot throws", () => {
-    expect(() => session.restoreActiveReview({ pair_id: "q1" })).toThrow();
-  });
+      session.gradeFail("wrong", 5003);
+      expect(pair("q2").failCount).toBe(1);
+    });
 
-  it("restoring with no snapshot is a no-op", () => {
-    session.restoreActiveReview(null);
-    expect(session.activeReview).toBeNull();
-    expect(session.reviewedEvents).toHaveLength(0);
-    expect(session.startNextReview(12)?.id).toBe("q1");
+    it("ignores snapshots for another deck, a missing pair, or a burned pair", () => {
+      expect(session.restoreActiveReview(snap({ deckId: "other" }), 0)).toBe(false);
+      expect(session.restoreActiveReview(snap({ pairId: "gone" }), 0)).toBe(false);
+      pair("q2").stage = 9;
+      pair("q2").nextDueAt = null;
+      expect(session.restoreActiveReview(snap(), 0)).toBe(false);
+      expect(session.activeReview).toBeNull();
+    });
+
+    it("no snapshot is a no-op", () => {
+      expect(session.restoreActiveReview(null, 0)).toBe(false);
+      expect(session.startNextReview(12)?.id).toBe("q1");
+    });
   });
 });

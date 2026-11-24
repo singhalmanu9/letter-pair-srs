@@ -1,6 +1,6 @@
 /**
- * Data structures and validation. Field names are snake_case so the JSON
- * format stays compatible with files written by the original Python app.
+ * Data types, parsing/validation of stored data, and small deck helpers.
+ * All timestamps are Unix epoch milliseconds.
  */
 
 export const ReviewResult = {
@@ -10,182 +10,266 @@ export const ReviewResult = {
 } as const;
 export type ReviewResult = (typeof ReviewResult)[keyof typeof ReviewResult];
 
-/** A single term with multiple accepted answers. */
+/** One letter pair and the answers (images/words) the user accepts for it. */
 export interface DeckItem {
   id: string;
   term: string;
   answers: string[];
+  updatedAt: number;
 }
 
-/** Mutable scheduling state for one deck item. */
-export interface PairState {
-  pair_id: string;
-  /** Unix timestamp (seconds) when the pair is next due. */
-  next_due: number;
-  /** Current interval in seconds. */
-  current_interval: number;
-  /** Non-timeout responses (pass + fail). */
-  response_count: number;
-  pass_count: number;
-  fail_count: number;
-  timeout_count: number;
-  /** How often the user gave each answer. */
-  answer_history: Record<string, number>;
-}
-
-/** A single review outcome. */
-export interface ReviewEvent {
-  pair_id: string;
-  term: string;
-  result: ReviewResult;
-  elapsed_seconds: number;
-  /** ISO 8601 UTC datetime. */
-  timestamp: string;
-  timeout_seconds: number;
-  user_answer: string | null;
-  reason: string | null;
-}
-
+/** A user's own deck. Decks created from a template are independent copies. */
 export interface Deck {
-  version: string;
+  id: string;
+  name: string;
+  /** Template the deck was created from, if any (informational only). */
+  templateId: string | null;
+  createdAt: number;
+  updatedAt: number;
   items: DeckItem[];
 }
 
-export interface SRSState {
-  version: string;
-  pairs: PairState[];
+/** Scheduling state for one deck item. */
+export interface PairState {
+  pairId: string;
+  /** SRS stage: 0 = new, 1..N = learning stages, N + 1 = burned. */
+  stage: number;
+  /** When the pair is next due, or null once burned. */
+  nextDueAt: number | null;
+  /** Non-timeout responses (pass + fail). */
+  responseCount: number;
+  passCount: number;
+  failCount: number;
+  timeoutCount: number;
+  /** How often the user gave each answer. */
+  answerHistory: Record<string, number>;
+  updatedAt: number;
+}
+
+/** One review outcome. History is an append-only list of these. */
+export interface ReviewEvent {
+  pairId: string;
+  term: string;
+  result: ReviewResult;
+  stageBefore: number;
+  stageAfter: number;
+  elapsedMs: number;
+  timeoutMs: number;
+  reviewedAt: number;
+  userAnswer: string | null;
+  reason: string | null;
+}
+
+/** The review in progress, saved so a reload can resume it. */
+export interface ActiveReviewSnapshot {
+  deckId: string;
+  pairId: string;
+  startedAt: number;
+  revealed: boolean;
 }
 
 // ---------------------------------------------------------------------------
-// Construction / parsing
+// Parsing. Each parser accepts unknown JSON and either returns a well-typed
+// value or throws a ValidationError naming the offending field.
 
-export function makePairState(
-  init: Pick<PairState, "pair_id" | "next_due" | "current_interval"> & Partial<PairState>,
-): PairState {
+export class ValidationError extends Error {
+  override name = "ValidationError";
+}
+
+type Json = Record<string, unknown>;
+
+function fail(path: string, message: string): never {
+  throw new ValidationError(`${path}: ${message}`);
+}
+
+function record(value: unknown, path: string): Json {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) fail(path, "expected an object");
+  return value as Json;
+}
+
+function array(value: unknown, path: string): unknown[] {
+  if (!Array.isArray(value)) fail(path, "expected an array");
+  return value;
+}
+
+function string(value: unknown, path: string, { nonEmpty = false } = {}): string {
+  if (typeof value !== "string") fail(path, "expected a string");
+  if (nonEmpty && value.trim() === "") fail(path, "must not be empty");
+  return value;
+}
+
+function number(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) fail(path, "expected a finite number");
+  return value;
+}
+
+function count(value: unknown, path: string): number {
+  const n = number(value, path);
+  if (!Number.isInteger(n) || n < 0) fail(path, "expected a non-negative integer");
+  return n;
+}
+
+function nullable<T>(value: unknown, parse: (v: unknown) => T): T | null {
+  return value === null || value === undefined ? null : parse(value);
+}
+
+export function parseDeckItem(value: unknown, path = "item"): DeckItem {
+  const o = record(value, path);
+  const answers = array(o.answers, `${path}.answers`).map((a, i) =>
+    string(a, `${path}.answers[${i}]`, { nonEmpty: true }),
+  );
+  if (answers.length === 0) fail(`${path}.answers`, "must contain at least one answer");
   return {
-    response_count: 0,
-    pass_count: 0,
-    fail_count: 0,
-    timeout_count: 0,
-    ...init,
-    answer_history: { ...(init.answer_history ?? {}) },
+    id: string(o.id, `${path}.id`, { nonEmpty: true }),
+    term: string(o.term, `${path}.term`, { nonEmpty: true }),
+    answers,
+    updatedAt: number(o.updatedAt, `${path}.updatedAt`),
   };
 }
 
-export function makeReviewEvent(
-  init: Omit<ReviewEvent, "user_answer" | "reason"> & Partial<Pick<ReviewEvent, "user_answer" | "reason">>,
-): ReviewEvent {
-  return { user_answer: null, reason: null, ...init };
+export function parseDeck(value: unknown, path = "deck"): Deck {
+  const o = record(value, path);
+  const items = array(o.items, `${path}.items`).map((item, i) => parseDeckItem(item, `${path}.items[${i}]`));
+  const deck: Deck = {
+    id: string(o.id, `${path}.id`, { nonEmpty: true }),
+    name: string(o.name, `${path}.name`, { nonEmpty: true }),
+    templateId: nullable(o.templateId, (v) => string(v, `${path}.templateId`)),
+    createdAt: number(o.createdAt, `${path}.createdAt`),
+    updatedAt: number(o.updatedAt, `${path}.updatedAt`),
+    items,
+  };
+  validateDeck(deck);
+  return deck;
 }
 
-/** Parse a pair state from JSON, accepting the legacy `attempt_count` field. */
-export function pairStateFromJSON(data: Record<string, unknown>): PairState {
-  const copy: Record<string, unknown> = { ...data };
-  if (!("response_count" in copy) && "attempt_count" in copy) {
-    copy.response_count = copy.attempt_count;
-    delete copy.attempt_count;
+export function parsePairState(value: unknown, path = "pair"): PairState {
+  const o = record(value, path);
+  const historyObj = record(o.answerHistory ?? {}, `${path}.answerHistory`);
+  const answerHistory: Record<string, number> = {};
+  for (const [answer, n] of Object.entries(historyObj)) {
+    answerHistory[answer] = count(n, `${path}.answerHistory[${JSON.stringify(answer)}]`);
   }
-  return makePairState(copy as unknown as PairState);
-}
-
-export function deckFromJSON(data: { version?: string; items?: DeckItem[] }): Deck {
-  return {
-    version: data.version ?? "1.0",
-    items: (data.items ?? []).map((item) => ({ ...item, answers: [...item.answers] })),
+  const pair: PairState = {
+    pairId: string(o.pairId, `${path}.pairId`, { nonEmpty: true }),
+    stage: count(o.stage, `${path}.stage`),
+    nextDueAt: nullable(o.nextDueAt, (v) => number(v, `${path}.nextDueAt`)),
+    responseCount: count(o.responseCount, `${path}.responseCount`),
+    passCount: count(o.passCount, `${path}.passCount`),
+    failCount: count(o.failCount, `${path}.failCount`),
+    timeoutCount: count(o.timeoutCount, `${path}.timeoutCount`),
+    answerHistory,
+    updatedAt: number(o.updatedAt, `${path}.updatedAt`),
   };
+  validatePairConsistency(pair);
+  return pair;
 }
 
-export function stateFromJSON(data: { version?: string; pairs?: Record<string, unknown>[] }): SRSState {
-  return {
-    version: data.version ?? "1.0",
-    pairs: (data.pairs ?? []).map(pairStateFromJSON),
-  };
+export function parseProgress(value: unknown, path = "progress"): PairState[] {
+  return array(value, path).map((p, i) => parsePairState(p, `${path}[${i}]`));
 }
 
-export function reviewEventFromJSON(data: Record<string, unknown>): ReviewEvent {
-  const result = data.result;
+export function parseReviewEvent(value: unknown, path = "event"): ReviewEvent {
+  const o = record(value, path);
+  const result = o.result;
   if (!Object.values(ReviewResult).includes(result as ReviewResult)) {
-    throw new Error(`Invalid review result: ${String(result)}`);
+    fail(`${path}.result`, `invalid review result ${JSON.stringify(result)}`);
   }
-  return makeReviewEvent(data as unknown as ReviewEvent);
+  return {
+    pairId: string(o.pairId, `${path}.pairId`, { nonEmpty: true }),
+    term: string(o.term, `${path}.term`),
+    result: result as ReviewResult,
+    stageBefore: count(o.stageBefore, `${path}.stageBefore`),
+    stageAfter: count(o.stageAfter, `${path}.stageAfter`),
+    elapsedMs: number(o.elapsedMs, `${path}.elapsedMs`),
+    timeoutMs: number(o.timeoutMs, `${path}.timeoutMs`),
+    reviewedAt: number(o.reviewedAt, `${path}.reviewedAt`),
+    userAnswer: nullable(o.userAnswer, (v) => string(v, `${path}.userAnswer`)),
+    reason: nullable(o.reason, (v) => string(v, `${path}.reason`)),
+  };
+}
+
+export function parseHistory(value: unknown, path = "history"): ReviewEvent[] {
+  return array(value, path).map((e, i) => parseReviewEvent(e, `${path}[${i}]`));
+}
+
+export function parseActiveReviewSnapshot(value: unknown, path = "activeReview"): ActiveReviewSnapshot {
+  const o = record(value, path);
+  if (typeof o.revealed !== "boolean") fail(`${path}.revealed`, "expected a boolean");
+  return {
+    deckId: string(o.deckId, `${path}.deckId`, { nonEmpty: true }),
+    pairId: string(o.pairId, `${path}.pairId`, { nonEmpty: true }),
+    startedAt: number(o.startedAt, `${path}.startedAt`),
+    revealed: o.revealed,
+  };
 }
 
 // ---------------------------------------------------------------------------
-// Deck helpers
+// Validation
 
-/** Add an accepted answer. Returns false if it was already present. */
-export function addAnswer(item: DeckItem, answer: string): boolean {
-  if (item.answers.includes(answer)) return false;
-  item.answers.push(answer);
+/** Throws if the deck has duplicate ids or duplicate terms. An empty deck is valid. */
+export function validateDeck(deck: Deck): true {
+  const ids = new Set<string>();
+  const terms = new Set<string>();
+  for (const item of deck.items) {
+    if (ids.has(item.id)) throw new ValidationError(`Duplicate item id in deck: ${item.id}`);
+    const term = item.term.trim().toUpperCase();
+    if (terms.has(term)) throw new ValidationError(`Duplicate term in deck: ${item.term}`);
+    ids.add(item.id);
+    terms.add(term);
+  }
   return true;
-}
-
-export function getItemById(deck: Deck, pairId: string): DeckItem | undefined {
-  return deck.items.find((item) => item.id === pairId);
-}
-
-/** Add an answer to a pair. Returns false if already present or pair not found. */
-export function addAnswerToPair(deck: Deck, pairId: string, answer: string): boolean {
-  const item = getItemById(deck, pairId);
-  return item ? addAnswer(item, answer) : false;
-}
-
-// ---------------------------------------------------------------------------
-// Pair state helpers
-
-export function recordAnswer(pair: PairState, answer: string): void {
-  pair.answer_history[answer] = (pair.answer_history[answer] ?? 0) + 1;
-}
-
-export function mostCommonAnswer(pair: PairState): string | null {
-  let best: string | null = null;
-  let bestCount = -Infinity;
-  for (const [answer, count] of Object.entries(pair.answer_history)) {
-    if (count > bestCount) {
-      best = answer;
-      bestCount = count;
-    }
-  }
-  return best;
-}
-
-export function totalResponses(pair: PairState): number {
-  return pair.response_count + pair.timeout_count;
 }
 
 /** Throws if the pair's counters are inconsistent. */
 export function validatePairConsistency(pair: PairState): true {
-  const { response_count, pass_count, fail_count, timeout_count } = pair;
-  if (Math.min(response_count, pass_count, fail_count, timeout_count) < 0) {
-    throw new Error(`Negative counters are not allowed for pair ${pair.pair_id}`);
-  }
-  if (response_count !== pass_count + fail_count) {
-    throw new Error(
-      `Consistency error for pair ${pair.pair_id}: response_count must equal pass_count + fail_count`,
+  if (pair.responseCount !== pair.passCount + pair.failCount) {
+    throw new ValidationError(
+      `Consistency error for pair ${pair.pairId}: responseCount must equal passCount + failCount`,
     );
   }
   return true;
 }
 
 // ---------------------------------------------------------------------------
-// Validation
+// Deck helpers
 
-export function validateDeck(deck: Deck): true {
-  if (deck.items.length === 0) throw new Error("Deck must contain at least one item");
-  for (const item of deck.items) {
-    if (!item.id || !item.term || !Array.isArray(item.answers) || item.answers.length === 0) {
-      throw new Error(`Invalid deck item: ${JSON.stringify(item)}`);
-    }
-  }
+export function getItemById(deck: Deck, pairId: string): DeckItem | undefined {
+  return deck.items.find((item) => item.id === pairId);
+}
+
+/**
+ * Add an accepted answer to a pair. Returns false if the answer is blank,
+ * already present, or the pair doesn't exist.
+ */
+export function addAnswerToPair(deck: Deck, pairId: string, answer: string, now: number): boolean {
+  const item = getItemById(deck, pairId);
+  const trimmed = answer.trim();
+  if (!item || trimmed === "" || item.answers.includes(trimmed)) return false;
+  item.answers.push(trimmed);
+  item.updatedAt = now;
+  deck.updatedAt = now;
   return true;
 }
 
-/** Validate that every pair references a deck item and is internally consistent. */
-export function validateState(deck: Deck, state: SRSState): true {
-  const deckIds = new Set(deck.items.map((item) => item.id));
-  for (const pair of state.pairs) {
-    if (!deckIds.has(pair.pair_id)) throw new Error(`Pair ${pair.pair_id} not found in deck`);
-    validatePairConsistency(pair);
+// ---------------------------------------------------------------------------
+// Pair state helpers
+
+export function recordAnswer(pair: PairState, answer: string): void {
+  pair.answerHistory[answer] = (pair.answerHistory[answer] ?? 0) + 1;
+}
+
+export function mostCommonAnswer(pair: PairState): string | null {
+  let best: string | null = null;
+  let bestCount = -Infinity;
+  for (const [answer, n] of Object.entries(pair.answerHistory)) {
+    if (n > bestCount) {
+      best = answer;
+      bestCount = n;
+    }
   }
-  return true;
+  return best;
+}
+
+export function totalResponses(pair: PairState): number {
+  return pair.responseCount + pair.timeoutCount;
 }

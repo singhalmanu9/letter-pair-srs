@@ -1,8 +1,7 @@
 /** Session orchestration: review flow, timeout handling and persistence hooks. */
 
-import { nowSeconds } from "./config";
 import { ReviewEngine, type SessionStats } from "./engine";
-import type { DeckItem, ReviewEvent, SRSState } from "./schemas";
+import type { ActiveReviewSnapshot, DeckItem, PairState, ReviewEvent } from "./schemas";
 import { ReviewTimer } from "./timer";
 
 /** In-flight state for the pair currently shown. */
@@ -14,31 +13,16 @@ export interface ActiveReview {
   revealed: boolean;
 }
 
-/** Serializable form of an active review (snake_case, matches the Python format). */
-export interface ActiveReviewSnapshot {
-  pair_id: string;
-  term: string;
-  answers: string[];
-  started_at: number;
-  timeout_seconds: number;
-  revealed: boolean;
-}
-
+/**
+ * Persistence hooks. They're called synchronously and may return promises;
+ * the caller is responsible for ordering and error handling (see WriteQueue).
+ */
 export interface SessionCallbacks {
-  saveState?: (state: SRSState) => void;
+  saveProgress?: (pairs: readonly PairState[]) => void;
   appendEvent?: (event: ReviewEvent) => void;
   saveActiveReview?: (snapshot: ActiveReviewSnapshot) => void;
   clearActiveReview?: () => void;
 }
-
-const SNAPSHOT_KEYS: readonly (keyof ActiveReviewSnapshot)[] = [
-  "pair_id",
-  "term",
-  "answers",
-  "started_at",
-  "timeout_seconds",
-  "revealed",
-];
 
 export class SessionController {
   activeReview: ActiveReview | null = null;
@@ -50,7 +34,7 @@ export class SessionController {
   ) {}
 
   /** Start the next due review, or return null when nothing is due. */
-  startNextReview(now: number = nowSeconds()): DeckItem | null {
+  startNextReview(now: number): DeckItem | null {
     if (this.activeReview) throw new Error("Cannot start a new review while another review is active");
 
     const due = this.engine.getDuePair(now);
@@ -60,18 +44,18 @@ export class SessionController {
       pairId: due.id,
       term: due.term,
       answers: [...due.answers],
-      timer: new ReviewTimer(now, this.engine.config.timeoutSeconds),
+      timer: new ReviewTimer(now, this.engine.config.timeoutMs),
       revealed: false,
     };
     this.persistActiveReview();
     return due;
   }
 
-  timeRemaining(now: number = nowSeconds()): number | null {
+  timeRemaining(now: number): number | null {
     return this.activeReview ? this.activeReview.timer.remaining(now) : null;
   }
 
-  revealAnswers(now: number = nowSeconds()): string[] {
+  revealAnswers(now: number): string[] {
     const active = this.ensureActive();
     this.enforceNotTimedOut(now);
     active.revealed = true;
@@ -83,41 +67,45 @@ export class SessionController {
     const active = this.activeReview;
     if (!active) return null;
     return {
-      pair_id: active.pairId,
-      term: active.term,
-      answers: [...active.answers],
-      started_at: active.timer.startedAt,
-      timeout_seconds: active.timer.timeoutSeconds,
+      deckId: this.engine.deck.id,
+      pairId: active.pairId,
+      startedAt: active.timer.startedAt,
       revealed: active.revealed,
     };
   }
 
-  /** Restore an in-progress review. The countdown intentionally restarts in full. */
-  restoreActiveReview(snapshot: Partial<ActiveReviewSnapshot> | null | undefined, now: number = nowSeconds()): void {
-    if (snapshot == null) return;
+  /**
+   * Resume a review saved before a reload. The countdown restarts in full.
+   * Returns false (and restores nothing) if the snapshot belongs to another
+   * deck or its pair no longer exists or isn't reviewable.
+   */
+  restoreActiveReview(snapshot: ActiveReviewSnapshot | null, now: number): boolean {
+    if (snapshot === null) return false;
     if (this.activeReview) throw new Error("Cannot restore review while another review is active");
+    if (snapshot.deckId !== this.engine.deck.id) return false;
 
-    const missing = SNAPSHOT_KEYS.filter((key) => !(key in snapshot)).sort();
-    if (missing.length) throw new Error(`Invalid session snapshot, missing: ${missing.join(", ")}`);
+    const item = this.engine.getItem(snapshot.pairId);
+    const pair = this.engine.pairs.find((p) => p.pairId === snapshot.pairId);
+    if (!item || !pair || pair.nextDueAt === null) return false;
 
-    const s = snapshot as ActiveReviewSnapshot;
     this.activeReview = {
-      pairId: s.pair_id,
-      term: s.term,
-      answers: [...s.answers],
-      timer: new ReviewTimer(now, Math.trunc(Number(s.timeout_seconds))),
-      revealed: Boolean(s.revealed),
+      pairId: item.id,
+      term: item.term,
+      answers: [...item.answers],
+      timer: new ReviewTimer(now, this.engine.config.timeoutMs),
+      revealed: snapshot.revealed,
     };
+    return true;
   }
 
-  gradePass(userAnswer: string | null = null, now: number = nowSeconds()): ReviewEvent {
+  gradePass(userAnswer: string | null, now: number): ReviewEvent {
     const active = this.ensureReadyForGrading(now);
     const event = this.engine.recordPass(active.pairId, active.timer.elapsed(now), userAnswer, now);
     this.finalizeEvent(event);
     return event;
   }
 
-  gradeFail(userAnswer: string | null = null, now: number = nowSeconds()): ReviewEvent {
+  gradeFail(userAnswer: string | null, now: number): ReviewEvent {
     const active = this.ensureReadyForGrading(now);
     const event = this.engine.recordFail(active.pairId, active.timer.elapsed(now), userAnswer, now);
     this.finalizeEvent(event);
@@ -125,11 +113,11 @@ export class SessionController {
   }
 
   /** Auto-fail and finalize if the active review has timed out. */
-  checkTimeout(now: number = nowSeconds()): ReviewEvent | null {
+  checkTimeout(now: number): ReviewEvent | null {
     const active = this.activeReview;
     if (!active || !active.timer.isTimedOut(now)) return null;
 
-    const event = this.engine.recordTimeout(active.pairId, this.engine.config.timeoutSeconds, now);
+    const event = this.engine.recordTimeout(active.pairId, now);
     this.finalizeEvent(event);
     return event;
   }
@@ -157,13 +145,13 @@ export class SessionController {
   private finalizeEvent(event: ReviewEvent): void {
     this.reviewedEvents.push(event);
     this.callbacks.appendEvent?.(event);
-    this.callbacks.saveState?.(this.engine.state);
+    this.callbacks.saveProgress?.(this.engine.pairs);
     this.callbacks.clearActiveReview?.();
     this.activeReview = null;
   }
 
   private persistActiveReview(): void {
     const snapshot = this.activeReviewSnapshot();
-    if (snapshot && this.callbacks.saveActiveReview) this.callbacks.saveActiveReview(snapshot);
+    if (snapshot) this.callbacks.saveActiveReview?.(snapshot);
   }
 }
