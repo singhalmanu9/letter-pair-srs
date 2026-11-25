@@ -5,6 +5,7 @@ import type { SessionStats } from "../lib/engine";
 import type { ReviewEvent } from "../lib/schemas";
 import { stageName } from "../lib/srs";
 import { errorMessage, Icon, plural } from "./common";
+import { BigCubeTag } from "./Deck";
 import { store, useStore } from "./store";
 
 type Phase = "recall" | "revealed" | "other" | "timeout" | "done";
@@ -194,7 +195,10 @@ export function Review({ onExit }: { onExit: () => void }) {
         <span class="muted">
           {done} done · {left} left
         </span>
-        <span class="muted">{pair ? stageName(pair.stage, engine.config.srs) : ""}</span>
+        <span class="muted">
+          {term && store.isBigCubeOnly(term) && <BigCubeTag />}
+          {pair ? stageName(pair.stage, engine.config.srs) : ""}
+        </span>
       </header>
       <div class="timer-track" aria-hidden="true">
         <div class="timer-fill" style={{ width: `${phase === "timeout" ? 0 : (remainingMs / timeoutMs) * 100}%` }} />

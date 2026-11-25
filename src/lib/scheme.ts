@@ -112,6 +112,17 @@ export function generatePairTerms(profile: MemoProfile): string[] {
   return [...all].sort((a, b) => a.localeCompare(b));
 }
 
+/**
+ * Pairs in the profile's list that can only come up on bigger cubes: on wings
+ * and centers every sticker is its own piece and the buffers differ, so pairs
+ * a 3x3 never needs can show up. Empty unless the profile includes them.
+ */
+export function bigCubeOnlyTerms(profile: MemoProfile): Set<string> {
+  if (profile.excludeImpossible) return new Set();
+  const small = new Set(generatePairTerms({ ...profile, excludeImpossible: true }).map(termKey));
+  return new Set(generatePairTerms(profile).map(termKey).filter((t) => !small.has(t)));
+}
+
 // --- Changing the scheme later ---------------------------------------------
 
 /**

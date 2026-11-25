@@ -235,13 +235,15 @@ function BuffersStep({ profile, onChange }: { profile: MemoProfile; onChange: (p
         </label>
         <label class="setting toggle-row">
           <span>
-            Leave out pairs that can't come up
-            <span class="setting-sub">Double letters, two stickers on the same piece, and buffer letters</span>
+            I also do 4BLD or 5BLD
+            <span class="setting-sub">
+              Adds pairs that only come up on bigger cubes, like your buffer letters on wings. They're marked 4BLD+.
+            </span>
           </span>
           <input
             type="checkbox"
-            checked={profile.excludeImpossible}
-            onChange={(e) => onChange({ ...profile, excludeImpossible: e.currentTarget.checked })}
+            checked={!profile.excludeImpossible}
+            onChange={(e) => onChange({ ...profile, excludeImpossible: !e.currentTarget.checked })}
           />
         </label>
       </div>

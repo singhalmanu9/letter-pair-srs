@@ -12,7 +12,7 @@ import { configFromSettings, Repository, type Settings } from "../lib/repository
 import { addAnswerToPair, removeAnswerFromPair, termKey, type PairState } from "../lib/schemas";
 import { getBrowserStore, requestPersistentStorage, type AsyncKeyValueStore } from "../lib/storage";
 import type { DeckTemplate } from "../lib/templates";
-import { applySchemeUpdate, generatePairTerms, type MemoProfile, type SchemeUpdatePlan } from "../lib/scheme";
+import { applySchemeUpdate, bigCubeOnlyTerms, generatePairTerms, type MemoProfile, type SchemeUpdatePlan } from "../lib/scheme";
 import { downloadJSON } from "../app/files";
 
 export type Status =
@@ -29,6 +29,7 @@ export class AppStore {
   settings: Settings | null = null;
   /** Letter scheme and orientation, or null if the user skipped setting one up. */
   profile: MemoProfile | null = null;
+  private bigCubeCache: { profile: MemoProfile | null; terms: Set<string> } = { profile: null, terms: new Set() };
   /** Bumped on every change so components re-render. */
   version = 0;
   private readonly listeners = new Set<() => void>();
@@ -88,6 +89,14 @@ export class AppStore {
   async startFromTemplate(template: DeckTemplate): Promise<void> {
     await createDeck(this.repo, template, Date.now());
     await this.reload();
+  }
+
+  /** True for pairs that only come up on 4x4 and bigger (only when the profile includes them). */
+  isBigCubeOnly(term: string): boolean {
+    if (this.bigCubeCache.profile !== this.profile) {
+      this.bigCubeCache = { profile: this.profile, terms: this.profile ? bigCubeOnlyTerms(this.profile) : new Set() };
+    }
+    return this.bigCubeCache.terms.has(termKey(term));
   }
 
   /** Save the profile and create a deck with every pair it generates (no answers yet). */

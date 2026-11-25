@@ -12,6 +12,7 @@ import { MemoryStore } from "../src/lib/storage";
 import { Repository } from "../src/lib/repository";
 import {
   applySchemeUpdate,
+  bigCubeOnlyTerms,
   cleanLetter,
   DEFAULT_PROFILE,
   generatePairTerms,
@@ -184,5 +185,20 @@ describe("changing the scheme", () => {
     const plan = planSchemeUpdate(deck, null, DEFAULT_PROFILE);
     expect(plan.missing).toEqual(["ZZ"]);
     expect(plan.added).not.toContain("AB");
+  });
+});
+
+describe("big cube pairs", () => {
+  it("are empty for 3BLD-only profiles", () => {
+    expect(bigCubeOnlyTerms(DEFAULT_PROFILE).size).toBe(0);
+  });
+
+  it("are the extra pairs a big-cube profile adds, like buffer letters", () => {
+    const big = { ...DEFAULT_PROFILE, excludeImpossible: false };
+    const extra = bigCubeOnlyTerms(big);
+    expect(extra.size).toBe(generatePairTerms(big).length - generatePairTerms(DEFAULT_PROFILE).length);
+    expect(extra.has("CA")).toBe(true);
+    expect(extra.has("AB")).toBe(false);
+    expect(extra.has("AA")).toBe(false);
   });
 });

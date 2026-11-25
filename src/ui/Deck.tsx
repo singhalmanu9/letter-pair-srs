@@ -104,7 +104,10 @@ export function Deck() {
                     <span class="warn-text">needs an answer</span>
                   )}
                 </span>
-                <span class="deck-level">{pair ? shortStage(pair.stage) : ""}</span>
+                <span class="deck-level">
+                  {store.isBigCubeOnly(item.term) && <BigCubeTag />}
+                  {pair ? shortStage(pair.stage) : ""}
+                </span>
               </button>
             );
           })}
@@ -113,6 +116,14 @@ export function Deck() {
 
       {selected && <PairEditor item={selected} onClose={() => setSelectedId(null)} />}
     </div>
+  );
+}
+
+export function BigCubeTag() {
+  return (
+    <span class="tag" title="Only comes up on 4x4 and bigger">
+      4BLD+
+    </span>
   );
 }
 
@@ -126,6 +137,16 @@ function PairEditor({ item, onClose }: { item: DeckItem; onClose: () => void }) 
   const pair = engine.getPairState(item.id);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Undo for the last removed answer, shown next to the title instead of a
+  // toast, which would land on top of the answer box on phones.
+  const [removed, setRemoved] = useState<{ answer: string; undo: () => Promise<void> } | null>(null);
+
+  useEffect(() => setRemoved(null), [item.id]);
+  useEffect(() => {
+    if (!removed) return;
+    const t = setTimeout(() => setRemoved(null), 6000);
+    return () => clearTimeout(t);
+  }, [removed]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -146,7 +167,7 @@ function PairEditor({ item, onClose }: { item: DeckItem; onClose: () => void }) 
 
   const remove = async (answer: string) => {
     const undo = await store.removeAnswer(item.id, answer);
-    if (undo) toast(`Removed "${answer}"`, { label: "Undo", run: () => void undo() });
+    if (undo) setRemoved({ answer, undo });
   };
 
   const deletePair = async () => {
@@ -174,10 +195,26 @@ function PairEditor({ item, onClose }: { item: DeckItem; onClose: () => void }) 
         <div class="sheet-handle" />
         <div class="editor-head">
           <span class="editor-term">{item.term}</span>
-          <span class="muted">
-            {pair && stageName(pair.stage, engine.config.srs)}
-            {pair?.nextDueAt != null && (pair.nextDueAt <= now ? " · due now" : ` · due in ${formatDuration(pair.nextDueAt - now)}`)}
-          </span>
+          {removed ? (
+            <span class="editor-undo" role="status">
+              <span class="editor-undo-text">Removed "{removed.answer}"</span>
+              <button
+                class="toast-action"
+                onClick={() => {
+                  void removed.undo();
+                  setRemoved(null);
+                }}
+              >
+                Undo
+              </button>
+            </span>
+          ) : (
+            <span class="muted">
+              {store.isBigCubeOnly(item.term) && <BigCubeTag />}
+              {pair && stageName(pair.stage, engine.config.srs)}
+              {pair?.nextDueAt != null && (pair.nextDueAt <= now ? " · due now" : ` · due in ${formatDuration(pair.nextDueAt - now)}`)}
+            </span>
+          )}
           <button class="icon-btn" onClick={onClose} aria-label="Close">
             <Icon name="x" />
           </button>

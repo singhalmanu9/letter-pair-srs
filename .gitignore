@@ -3,3 +3,4 @@ lp-venv/
 node_modules/
 dist/
 .claude/
+.vite/

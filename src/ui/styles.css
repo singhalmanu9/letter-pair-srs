@@ -10,6 +10,7 @@
   --primary: #18181b;
   --on-primary: #ffffff;
   --danger: #dc2626;
+  --tag: #7c3aed;
   --warn-bg: #fef3c7;
   --warn-text: #92400e;
   --radius: 10px;
@@ -20,6 +21,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0f0f11;
+    --tag: #a78bfa;
     --bg-soft: #1c1c1f;
     --bg-softer: #2a2a2e;
     --text: #f4f4f5;
@@ -1113,3 +1115,39 @@ select {
   letter-spacing: 0.08em;
   padding: 16px 0;
 }
+
+/* Marks pairs that only come up on bigger cubes. */
+.tag {
+  display: inline-block;
+  margin: 0 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  color: var(--tag);
+  border: 1px solid currentColor;
+}
+
+.editor-head .muted .tag,
+.review-top .muted .tag {
+  margin-left: 0;
+}
+
+/* Undo after removing an answer, in place of the level line. */
+.editor-undo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.editor-undo-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
